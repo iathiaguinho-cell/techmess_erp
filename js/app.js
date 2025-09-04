@@ -1,3 +1,8 @@
+// ================================
+// 🚀 TECHMESS ERP + E-COMMERCE
+// Com Detetive de Erros Integrado
+// ================================
+
 // === CONFIGURAÇÃO DO FIREBASE ===
 const firebaseConfig = {
   apiKey: "AIzaSyARb-0QE9QcYD2OjkCsOj0pmKTgkJQRlSg",
@@ -9,7 +14,13 @@ const firebaseConfig = {
   databaseURL: "https://vipcell-gestor-default-rtdb.firebaseio.com/"
 };
 
-firebase.initializeApp(firebaseConfig);
+// Inicializar Firebase
+try {
+  firebase.initializeApp(firebaseConfig);
+} catch (e) {
+  // Pode já estar inicializado
+}
+
 const auth = firebase.auth();
 const db = firebase.database();
 
@@ -30,9 +41,231 @@ let cart = [];
 // === DOM ===
 const app = document.getElementById('app');
 
-// === ROTEAMENTO ===
+// ================================
+// 🔍 TECHMESS DETECTIVE v1.0
+// Sistema inteligente de diagnóstico e correção de erros
+// ================================
+
+class TechmessDetective {
+  constructor() {
+    this.report = {
+      firebaseConfig: false,
+      databaseConnection: false,
+      authState: false,
+      dataLoaded: false,
+      cloudinaryReady: false,
+      errors: [],
+      warnings: []
+    };
+  }
+
+  async investigate() {
+    console.log("🔍 Techmess Detective: Iniciando investigação...");
+
+    // 1. Verificar configuração do Firebase
+    this.checkFirebaseConfig();
+
+    // 2. Testar conexão com o banco
+    if (this.report.firebaseConfig) {
+      await this.testDatabaseAccess();
+    }
+
+    // 3. Verificar estado de autenticação
+    await this.checkAuthState();
+
+    // 4. Tentar carregar dados
+    if (this.report.databaseConnection && this.report.authState) {
+      await this.loadDataSafely();
+    }
+
+    // 5. Verificar Cloudinary
+    this.checkCloudinary();
+
+    // Exibir relatório
+    this.presentReport();
+  }
+
+  checkFirebaseConfig() {
+    const required = ['apiKey', 'authDomain', 'projectId', 'databaseURL'];
+    const missing = required.filter(key => !firebaseConfig[key]);
+
+    if (missing.length === 0) {
+      this.report.firebaseConfig = true;
+    } else {
+      this.report.errors.push(`Firebase Config: faltando ${missing.join(', ')}`);
+    }
+  }
+
+  async testDatabaseAccess() {
+    try {
+      const testRef = db.ref('.info/connected');
+      const snapshot = await Promise.race([
+        testRef.once('value'),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 5000))
+      ]);
+      if (snapshot.val() === true) {
+        this.report.databaseConnection = true;
+      } else {
+        this.report.errors.push("Não foi possível conectar ao Realtime Database.");
+      }
+    } catch (err) {
+      this.report.errors.push(`Erro de conexão: ${err.message || 'Timeout ou rede falhou'}`);
+    }
+  }
+
+  async checkAuthState() {
+    return new Promise(resolve => {
+      const unsubscribe = auth.onAuthStateChanged(user => {
+        currentUser = user;
+        this.report.authState = true;
+        if (!user) {
+          this.report.warnings.push("Nenhum usuário logado. Acesse como visitante ou faça login.");
+        }
+        unsubscribe();
+        resolve();
+      }, err => {
+        this.report.errors.push(`Erro de autenticação: ${err.message}`);
+        resolve();
+      });
+    });
+  }
+
+  async loadDataSafely() {
+    const paths = ['products', 'sales', 'suppliers', 'purchases', 'accounts'];
+    let hasData = false;
+
+    for (const path of paths) {
+      try {
+        const snapshot = await Promise.race([
+          db.ref(path).once('value'),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 5000))
+        ]);
+        window[path] = Object.values(snapshot.val() || {});
+        if (Object.keys(snapshot.val() || {}).length > 0) {
+          hasData = true;
+        }
+      } catch (err) {
+        this.report.errors.push(`Erro ao ler ${path}: ${err.message}`);
+      }
+    }
+
+    this.report.dataLoaded = hasData;
+    if (!hasData) {
+      this.report.warnings.push("Nenhum dado encontrado no banco. A aplicação usará modo de demonstração.");
+      this.loadDemoData();
+    }
+  }
+
+  loadDemoData() {
+    products = [
+      {
+        id: 'demo_001',
+        name: 'iPhone 15',
+        price: 5000,
+        quantity: 10,
+        alertLevel: 3,
+        description: 'Smartphone Apple de última geração',
+        imageUrl: 'https://res.cloudinary.com/dmuvm1o6m/image/upload/v1680000000/placeholder.jpg'
+      },
+      {
+        id: 'demo_002',
+        name: 'Smart TV 55"',
+        price: 3200,
+        quantity: 5,
+        alertLevel: 2,
+        description: 'TV 4K com Wi-Fi',
+        imageUrl: 'https://res.cloudinary.com/dmuvm1o6m/image/upload/v1680000000/placeholder.jpg'
+      },
+      {
+        id: 'demo_003',
+        name: 'Notebook Gamer',
+        price: 8000,
+        quantity: 3,
+        alertLevel: 2,
+        description: 'Intel i7, 16GB RAM, RTX 3060',
+        imageUrl: 'https://res.cloudinary.com/dmuvm1o6m/image/upload/v1680000000/placeholder.jpg'
+      }
+    ];
+    sales = [];
+    suppliers = [
+      { id: 'sup_001', name: 'Distribuidora TechGlobal', email: 'contato@techglobal.com' }
+    ];
+    purchases = [];
+    accounts = [];
+  }
+
+  checkCloudinary() {
+    if (typeof cloudinary !== 'undefined') {
+      this.report.cloudinaryReady = true;
+    } else {
+      this.report.warnings.push("Cloudinary não carregado. Upload de imagens desativado.");
+    }
+  }
+
+  presentReport() {
+    const app = document.getElementById('app');
+    
+    if (this.report.errors.length > 0) {
+      app.innerHTML = `
+        <div class="flex flex-col items-center justify-center min-h-screen bg-dark text-red-300 p-6">
+          <h1 class="text-2xl font-bold mb-4 text-red-400">🚨 Erro Detectado</h1>
+          <div class="bg-red-900 bg-opacity-30 p-6 rounded-lg max-w-lg w-full">
+            <h2 class="font-bold mb-2">Problemas encontrados:</h2>
+            <ul class="list-disc list-inside text-sm space-y-1 mb-4">
+              ${this.report.errors.map(e => `<li>${e}</li>`).join('')}
+            </ul>
+            <h3 class="font-semibold mt-4">Soluções:</h3>
+            <ol class="list-decimal list-inside text-sm space-y-1">
+              <li>Verifique sua conexão com a internet</li>
+              <li>No Firebase Console, vá para <strong>Realtime Database > Rules</strong> e use:
+<pre class="bg-black p-2 rounded text-xs mt-1">{
+  "rules": {
+    ".read": "auth != null",
+    ".write": "auth != null"
+  }
+}</pre>
+              </li>
+              <li>Adicione pelo menos um produto no banco de dados</li>
+              <li>Use <strong>Firebase Hosting</strong> em vez de GitHub Pages para evitar bloqueios</li>
+            </ol>
+            <button onclick="location.reload()" class="btn-neon mt-4 w-full">Tentar Novamente</button>
+          </div>
+        </div>
+      `;
+      console.error("Techmess Detective Report:", this.report);
+      return;
+    }
+
+    if (this.report.warnings.length > 0) {
+      app.innerHTML = `
+        <div class="flex flex-col items-center justify-center min-h-screen bg-dark p-6">
+          <h1 class="text-2xl font-bold mb-4 accent-text">⚠️ Modo de Demonstração</h1>
+          <div class="bg-yellow-900 bg-opacity-30 p-6 rounded-lg max-w-lg w-full text-yellow-200">
+            <p class="mb-3">A aplicação está funcionando com dados de exemplo porque:</p>
+            <ul class="list-disc list-inside text-sm space-y-1 mb-4">
+              ${this.report.warnings.map(w => `<li>${w}</li>`).join('')}
+            </ul>
+            <button onclick="window.startApp()" class="btn-neon w-full">Continuar com Demo</button>
+          </div>
+        </div>
+      `;
+      window.startApp = () => {
+        renderApp();
+      };
+      return;
+    }
+
+    // Tudo OK
+    renderApp();
+  }
+}
+
+// ================================
+// 🚀 FUNÇÕES DE RENDERIZAÇÃO
+// ================================
+
 function renderApp() {
-  if (!currentUser) {
+  if (!currentUser && currentScreen !== 'home') {
     renderLogin();
   } else if (currentScreen === 'home') {
     renderPublicStore();
@@ -87,6 +320,7 @@ function renderPublicStore() {
     <main class="p-6 flex-1">
       <h2 class="text-2xl font-bold mb-6">Produtos</h2>
       <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6" id="productGrid"></div>
+      ${cart.length > 0 ? `<button onclick="openCheckout()" class="btn-neon mt-6">🛒 Ver Carrinho (${cart.reduce((acc, i) => acc + i.qty, 0)})</button>` : ''}
     </main>
     <footer class="p-4 text-center text-gray-500 text-sm">© 2025 Techmess. Todos os direitos reservados.</footer>
   `;
@@ -127,9 +361,10 @@ function addToCart(productId) {
     cart.push({ ...product, qty: 1 });
   }
   alert(`${product.name} adicionado ao carrinho!`);
+  renderPublicStore();
 }
 
-// === CHECKOUT MODAL ===
+// === CHECKOUT ===
 window.openCheckout = function() {
   const modal = document.createElement('div');
   modal.classList.add('modal-overlay');
@@ -171,7 +406,6 @@ window.openCheckout = function() {
     );
     window.open(`https://wa.me/${phone}?text=${message}`, '_blank');
     
-    // Salvar no Firebase
     db.ref('sales').push({
       customerId: name,
       items: cart.map(i => ({ id: i.id, name: i.name, qty: i.qty, price: i.price })),
@@ -184,6 +418,7 @@ window.openCheckout = function() {
 
     cart = [];
     document.body.removeChild(modal);
+    renderPublicStore();
   };
 };
 
@@ -245,7 +480,12 @@ async function navigateTo(screen) {
   currentScreen = screen;
   const main = document.getElementById('mainContent');
   main.innerHTML = '<div class="flex items-center justify-center h-64"><div class="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-accent"></div></div>';
-  await loadData();
+  
+  // Recarregar dados se necessário
+  if (['dashboard', 'inventory', 'sales'].includes(screen)) {
+    await loadDataSafelyForNav();
+  }
+
   setTimeout(() => {
     switch (screen) {
       case 'dashboard': renderDashboard(); break;
@@ -259,7 +499,18 @@ async function navigateTo(screen) {
   }, 200);
 }
 
-// === MÓDULOS ERP ===
+async function loadDataSafelyForNav() {
+  const paths = ['products', 'sales'];
+  for (const path of paths) {
+    try {
+      const snapshot = await db.ref(path).once('value');
+      window[path] = Object.values(snapshot.val() || {});
+    } catch (err) {
+      console.warn(`Erro ao carregar ${path}:`, err.message);
+    }
+  }
+}
+
 function renderDashboard() {
   const today = new Date().toISOString().split('T')[0];
   const salesToday = sales.filter(s => s.date === today && s.status === 'confirmed');
@@ -278,7 +529,7 @@ function renderDashboard() {
     <div class="bg-red-900 bg-opacity-50 p-4 rounded border border-red-600">
       <h3 class="font-semibold text-red-300">⚠️ Estoque Baixo</h3>
       <ul>${lowStock.map(p => `<li>${p.name} (${p.quantity})</li>`).join('')}</ul>
-    </div>` : ''}
+    </div>` : '<p>Nenhum alerta de estoque.</p>'}
   `;
 }
 
@@ -313,7 +564,7 @@ function renderProductList() {
     const badge = p.quantity === 0 ? 'badge-out' : p.quantity <= p.alertLevel ? 'badge-low' : 'badge-in';
     return `
       <tr>
-        <td><img src="${p.imageUrl}" class="w-10 h-10 object-cover rounded" /></td>
+        <td><img src="${p.imageUrl || 'https://res.cloudinary.com/dmuvm1o6m/image/upload/v1680000000/placeholder.jpg'}" class="w-10 h-10 object-cover rounded" /></td>
         <td>${p.name}</td>
         <td>R$ ${p.price}</td>
         <td>${p.quantity}</td>
@@ -380,7 +631,7 @@ function openProductModal(productId = null) {
     const ref = data.id ? db.ref(`products/${data.id}`) : db.ref('products').push();
     if (!data.id) data.id = ref.key;
     await ref.set(data);
-    await loadData();
+    await loadDataSafelyForNav();
     renderProductList();
     document.body.removeChild(modal);
   };
@@ -389,7 +640,7 @@ function openProductModal(productId = null) {
 async function deleteProduct(id) {
   if (confirm('Excluir?')) {
     await db.ref(`products/${id}`).remove();
-    await loadData();
+    await loadDataSafelyForNav();
     renderProductList();
   }
 }
@@ -415,8 +666,6 @@ function viewKardex(productId) {
   document.body.appendChild(modal);
 }
 
-// === VENDAS, FINANCEIRO, ETC. (implementações similares) → Podem ser expandidas
-
 function logout() {
   auth.signOut().then(() => {
     currentUser = null;
@@ -425,16 +674,24 @@ function logout() {
   });
 }
 
-// === INICIALIZAÇÃO ===
-auth.onAuthStateChanged(user => {
+// ================================
+// 🚀 INICIALIZAÇÃO COM DETETIVE
+// ================================
+
+auth.onAuthStateChanged(async (user) => {
   currentUser = user;
-  setTimeout(() => {
-    document.getElementById('loading')?.remove();
-    renderApp();
-  }, 800);
+
+  const loading = document.getElementById('loading');
+  if (loading) loading.remove();
+
+  const detective = new TechmessDetective();
+  await detective.investigate();
 });
 
-// === FUNÇÕES GLOBAIS ===
+// ================================
+// 🔧 FUNÇÕES GLOBAIS
+// ================================
+
 window.addToCart = addToCart;
 window.openCheckout = openCheckout;
 window.openProductModal = openProductModal;
