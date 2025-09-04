@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Techmess ERP</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link href="./css/styles.css" rel="stylesheet">
+</head>
+<body class="bg-gray-900 text-gray-100 font-sans antialiased">
+    <div id="app" class="min-h-screen flex flex-col">
+        <!-- Header (Login/Logout, Logo) -->
+        <header class="bg-gray-800 p-4 flex justify-between items-center shadow-md">
+            <h1 class="text-2xl font-bold text-cyan-400">Techmess ERP</h1>
+            <nav>
+                <!-- Navigation for public view or ERP dashboard -->
+                <ul class="flex space-x-4">
+                    <li><a href="#" id="nav-home" class="hover:text-cyan-400">Home</a></li>
+                    <li><a href="#" id="nav-shop" class="hover:text-cyan-400">Loja</a></li>
+                    <li><a href="#" id="nav-cart" class="hover:text-cyan-400">Carrinho</a></li>
+                    <li><a href="#" id="nav-dashboard" class="hover:text-cyan-400">Dashboard</a></li>
+                    <li><button id="auth-button" class="bg-cyan-600 hover:bg-cyan-700 text-white font-bold py-2 px-4 rounded">Login</button></li>
+                </ul>
+            </nav>
+        </header>
+
+        <!-- Main Content Area -->
+        <main class="flex-grow p-4">
+            <!-- Public View (E-commerce) -->
+            <section id="public-view" class="hidden">
+                <h2 class="text-xl font-semibold mb-4">Nossos Produtos</h2>
+                <div id="product-list" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6"></div>
+
+                <!-- Cart Modal -->
+                <div id="cart-modal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center hidden">
+                    <div class="bg-gray-800 p-6 rounded-lg shadow-lg w-11/12 md:w-1/2 lg:w-1/3">
+                        <h3 class="text-xl font-semibold mb-4">Seu Carrinho</h3>
+                        <div id="cart-items"></div>
+                        <p class="text-lg font-bold mt-4">Total: <span id="cart-total">R$ 0,00</span></p>
+                        <button id="checkout-button" class="mt-6 bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded">Finalizar Compra</button>
+                        <button id="close-cart-modal" class="mt-4 bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded">Fechar</button>
+                    </div>
+                </div>
+
+                <!-- Checkout Modal -->
+                <div id="checkout-modal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center hidden">
+                    <div class="bg-gray-800 p-6 rounded-lg shadow-lg w-11/12 md:w-1/2 lg:w-1/3">
+                        <h3 class="text-xl font-semibold mb-4">Informações para Checkout</h3>
+                        <input type="text" id="customer-name" placeholder="Seu Nome" class="w-full p-2 mb-4 rounded bg-gray-700 text-white border border-gray-600">
+                        <input type="text" id="customer-whatsapp" placeholder="Seu WhatsApp" class="w-full p-2 mb-4 rounded bg-gray-700 text-white border border-gray-600">
+                        <button id="submit-checkout" class="bg-cyan-600 hover:bg-cyan-700 text-white font-bold py-2 px-4 rounded">Confirmar Pedido</button>
+                        <button id="close-checkout-modal" class="mt-4 bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded">Fechar</button>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Management Panel (ERP) -->
+            <section id="management-panel" class="hidden">
+                <h2 class="text-xl font-semibold mb-4">Painel de Gestão</h2>
+                <nav class="mb-4">
+                    <ul class="flex border-b border-gray-700">
+                        <li><button id="tab-dashboard" class="py-2 px-4 text-gray-300 hover:text-cyan-400 border-b-2 border-transparent hover:border-cyan-400">Dashboard</button></li>
+                        <li><button id="tab-sales" class="py-2 px-4 text-gray-300 hover:text-cyan-400 border-b-2 border-transparent hover:border-cyan-400">Vendas</button></li>
+                        <li><button id="tab-purchases" class="py-2 px-4 text-gray-300 hover:text-cyan-400 border-b-2 border-transparent hover:border-cyan-400">Compras</button></li>
+                        <li><button id="tab-stock" class="py-2 px-4 text-gray-300 hover:text-cyan-400 border-b-2 border-transparent hover:border-cyan-400">Estoque</button></li>
+                        <li><button id="tab-finance" class="py-2 px-4 text-gray-300 hover:text-cyan-400 border-b-2 border-transparent hover:border-400">Financeiro</button></li>
+                        <li><button id="tab-suppliers" class="py-2 px-4 text-gray-300 hover:text-cyan-400 border-b-2 border-transparent hover:border-cyan-400">Fornecedores</button></li>
+                    </ul>
+                </nav>
+
+                <!-- Dashboard Content -->
+                <div id="dashboard-content" class="tab-content hidden">
+                    <h3 class="text-lg font-semibold mb-2">Dashboard</h3>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div class="bg-gray-800 p-4 rounded-lg shadow-md"><p>Faturamento do Mês: <span id="monthly-revenue">R$ 0,00</span></p></div>
+                        <div class="bg-gray-800 p-4 rounded-lg shadow-md"><p>Vendas do Dia: <span id="daily-sales">R$ 0,00</span></p></div>
+                    </div>
+                    <h4 class="text-md font-semibold mt-4 mb-2">Alertas de Estoque Baixo</h4>
+                    <ul id="low-stock-alerts" class="list-disc list-inside"></ul>
+                </div>
+
+                <!-- Sales Content -->
+                <div id="sales-content" class="tab-content hidden">
+                    <h3 class="text-lg font-semibold mb-2">Vendas</h3>
+                    <div id="pending-orders"></div>
+                </div>
+
+                <!-- Purchases Content -->
+                <div id="purchases-content" class="tab-content hidden">
+                    <h3 class="text-lg font-semibold mb-2">Compras</h3>
+                    <button id="new-purchase-button" class="bg-cyan-600 hover:bg-cyan-700 text-white font-bold py-2 px-4 rounded mb-4">Nova Compra</button>
+                    <div id="purchase-list"></div>
+                </div>
+
+                <!-- Stock Content -->
+                <div id="stock-content" class="tab-content hidden">
+                    <h3 class="text-lg font-semibold mb-2">Estoque</h3>
+                    <button id="add-product-button" class="bg-cyan-600 hover:bg-cyan-700 text-white font-bold py-2 px-4 rounded mb-4">Adicionar Produto</button>
+                    <div id="product-management-list"></div>
+
+                    <!-- Product Form Modal -->
+                    <div id="product-form-modal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center hidden">
+                        <div class="bg-gray-800 p-6 rounded-lg shadow-lg w-11/12 md:w-1/2 lg:w-1/3">
+                            <h3 class="text-xl font-semibold mb-4" id="product-form-title">Adicionar Produto</h3>
+                            <input type="hidden" id="product-id">
+                            <input type="text" id="product-name" placeholder="Nome do Produto" class="w-full p-2 mb-4 rounded bg-gray-700 text-white border border-gray-600">
+                            <input type="number" id="product-price" placeholder="Preço de Venda" class="w-full p-2 mb-4 rounded bg-gray-700 text-white border border-gray-600" step="0.01">
+                            <input type="number" id="product-quantity" placeholder="Quantidade" class="w-full p-2 mb-4 rounded bg-gray-700 text-white border border-gray-600">
+                            <textarea id="product-description" placeholder="Descrição" class="w-full p-2 mb-4 rounded bg-gray-700 text-white border border-gray-600"></textarea>
+                            <input type="number" id="product-alert-level" placeholder="Nível de Alerta de Estoque" class="w-full p-2 mb-4 rounded bg-gray-700 text-white border border-gray-600">
+                            <input type="file" id="product-image-upload" accept="image/*" class="w-full p-2 mb-4 rounded bg-gray-700 text-white border border-gray-600">
+                            <button id="save-product-button" class="bg-cyan-600 hover:bg-cyan-700 text-white font-bold py-2 px-4 rounded">Salvar Produto</button>
+                            <button id="close-product-form-modal" class="mt-4 bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded">Fechar</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Finance Content -->
+                <div id="finance-content" class="tab-content hidden">
+                    <h3 class="text-lg font-semibold mb-2">Financeiro</h3>
+                    <div id="financial-transactions"></div>
+                    <p class="text-lg font-bold mt-4">Saldo de Caixa: <span id="cash-balance">R$ 0,00</span></p>
+                </div>
+
+                <!-- Suppliers Content -->
+                <div id="suppliers-content" class="tab-content hidden">
+                    <h3 class="text-lg font-semibold mb-2">Fornecedores</h3>
+                    <button id="add-supplier-button" class="bg-cyan-600 hover:bg-cyan-700 text-white font-bold py-2 px-4 rounded mb-4">Adicionar Fornecedor</button>
+                    <div id="supplier-list"></div>
+
+                    <!-- Supplier Form Modal -->
+                    <div id="supplier-form-modal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center hidden">
+                        <div class="bg-gray-800 p-6 rounded-lg shadow-lg w-11/12 md:w-1/2 lg:w-1/3">
+                            <h3 class="text-xl font-semibold mb-4" id="supplier-form-title">Adicionar Fornecedor</h3>
+                            <input type="hidden" id="supplier-id">
+                            <input type="text" id="supplier-name" placeholder="Nome do Fornecedor" class="w-full p-2 mb-4 rounded bg-gray-700 text-white border border-gray-600">
+                            <input type="text" id="supplier-contact" placeholder="Contato" class="w-full p-2 mb-4 rounded bg-gray-700 text-white border border-gray-600">
+                            <button id="save-supplier-button" class="bg-cyan-600 hover:bg-cyan-700 text-white font-bold py-2 px-4 rounded">Salvar Fornecedor</button>
+                            <button id="close-supplier-form-modal" class="mt-4 bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded">Fechar</button>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </main>
+
+        <!-- Footer -->
+        <footer class="bg-gray-800 p-4 text-center text-gray-500 shadow-inner">
+            <p>&copy; 2025 Techmess ERP. Todos os direitos reservados.</p>
+        </footer>
+    </div>
+
+    <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-database-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-storage-compat.js"></script>
+    <script src="./js/app.js"></script>
+</body>
+</html>
+
+
