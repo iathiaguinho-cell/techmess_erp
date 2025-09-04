@@ -1,296 +1,443 @@
-// =================================================================================
-// CONFIGURAÇÃO E INICIALIZAÇÃO
-// =================================================================================
+// === CONFIGURAÇÃO DO FIREBASE ===
 const firebaseConfig = {
   apiKey: "AIzaSyARb-0QE9QcYD2OjkCsOj0pmKTgkJQRlSg",
   authDomain: "vipcell-gestor.firebaseapp.com",
   projectId: "vipcell-gestor",
   storageBucket: "vipcell-gestor.appspot.com",
   messagingSenderId: "259960306679",
-  appId: "1:259960306679:web:ad7a41cd1842862f7f8cf2"
+  appId: "1:259960306679:web:ad7a41cd1842862f7f8cf2",
+  databaseURL: "https://vipcell-gestor-default-rtdb.firebaseio.com/"
 };
-
-const CLOUDINARY_CLOUD_NAME = "dmuvm1o6m";
-const CLOUDINARY_UPLOAD_PRESET = "poh3ej4m";
 
 firebase.initializeApp(firebaseConfig);
 const auth = firebase.auth();
 const db = firebase.database();
 
-// =================================================================================
-// ESTADO GLOBAL DA APLICAÇÃO
-// =================================================================================
-let state = {
-    user: null,
-    inventory: {},
-    suppliers: {},
-    purchases: {},
-    sales: {},
-    cashFlow: {},
-    cart: JSON.parse(localStorage.getItem('techmessCart')) || [],
-    listeners: {}
-};
+// === CLOUDINARY ===
+const cloudName = 'dmuvm1o6m';
+const uploadPreset = 'poh3ej4m';
 
-// =================================================================================
-// HELPERS E FUNÇÕES UTILITÁRIAS
-// =================================================================================
-const el = (id) => document.getElementById(id);
-const render = (elementId, html) => {
-    const element = el(elementId);
-    if (element) element.innerHTML = html;
-};
-const renderModal = (html) => {
-    const modalRoot = el('modal-root');
-    if (modalRoot) modalRoot.innerHTML = html;
-};
-const toggleModal = (modalId, show) => {
-    const modal = el(modalId);
-    if (!modal) return;
-    if (show) {
-        modal.classList.remove('hidden');
-        modal.classList.add('flex');
-    } else {
-        modal.classList.add('hidden');
-        modal.classList.remove('flex');
-        setTimeout(() => renderModal(''), 300);
-    }
-};
-const formatDate = (timestamp) => new Date(timestamp).toLocaleDateString('pt-BR');
-const formatCurrency = (value) => `R$ ${Number(value).toFixed(2).replace('.', ',')}`;
+// === ESTADO GLOBAL ===
+let currentUser = null;
+let currentScreen = 'home';
+let products = [];
+let suppliers = [];
+let sales = [];
+let purchases = [];
+let accounts = [];
+let cart = [];
 
-// =================================================================================
-// PONTO DE ENTRADA DA APLICAÇÃO
-// =================================================================================
-document.addEventListener('DOMContentLoaded', () => {
-    auth.onAuthStateChanged(user => {
-        if (user) {
-            state.user = user;
-            renderAdminPanel();
-            initializeDataListeners();
-        } else {
-            state.user = null;
-            stopAllListeners();
-            renderStorefront();
-        }
-    });
-});
+// === DOM ===
+const app = document.getElementById('app');
 
-// =================================================================================
-// RENDERIZAÇÃO DAS TELAS PRINCIPAIS
-// =================================================================================
-function renderStorefront() {
-    const html = `
-        <div id="public-area">
-            <header class="bg-black/30 backdrop-blur-lg sticky top-0 z-50 border-b border-cyan-500/20">
-                <div class="container mx-auto px-6 py-4 flex justify-between items-center">
-                    <div><h1 class="techmess-title text-4xl font-bold tracking-wider">TECHMESS</h1><p class="text-sm text-gray-400">Produtos Apple e eletrônicos</p></div>
-                    <button id="public-cart-btn" class="relative text-white p-2 rounded-full hover:bg-gray-700"><i class='bx bxs-cart text-3xl'></i><span id="public-cart-count" class="absolute top-0 right-0 bg-cyan-500 text-black text-xs font-bold rounded-full h-5 w-5 flex items-center justify-center ${state.cart.length > 0 ? '' : 'hidden'}">${state.cart.length}</span></button>
-                </div>
-            </header>
-            <main id="showcase" class="container mx-auto p-6 mt-4">
-                <h2 class="text-2xl font-semibold text-white mb-6">Produtos Disponíveis</h2>
-                <div id="product-grid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6"><p class="col-span-full text-center text-gray-500 py-10">Carregando catálogo...</p></div>
-            </main>
-            <footer class="bg-black text-white py-4 mt-12 border-t border-cyan-500/10">
-                <div class="container mx-auto px-6 text-center text-sm"><p class="text-gray-500">&copy; 2025 Techmess. Todos os direitos reservados.</p><button id="admin-login-btn" class="mt-2 text-gray-600 hover:text-cyan-400 text-xs transition-colors">Acesso Restrito</button></div>
-            </footer>
-        </div>
-    `;
-    render('app-root', html);
-    el('admin-login-btn').addEventListener('click', showAuthModal);
-    displayProducts();
+// === ROTEAMENTO ===
+function renderApp() {
+  if (!currentUser) {
+    renderLogin();
+  } else if (currentScreen === 'home') {
+    renderPublicStore();
+  } else {
+    renderERP();
+  }
 }
 
-function renderAdminPanel() {
-    const html = `
-        <div id="admin-panel">
-            <header class="bg-gray-800 shadow-lg"><div class="container mx-auto px-4 py-4 flex justify-between items-center"><h1 class="text-xl font-bold text-white">Painel de Gestão <span class="techmess-title-alt font-semibold">Techmess</span></h1><div class="flex items-center gap-4"><p id="currentUserName" class="font-semibold text-gray-300 text-sm">${state.user.email}</p><button id="logoutButton" class="text-sm text-red-500 hover:text-red-400 transition-colors">Sair</button></div></div></header>
-            <main class="container mx-auto p-6">
-                <div class="flex border-b border-gray-700 mb-6 overflow-x-auto">
-                    <button class="tab-btn active" data-tab="dashboard">Dashboard</button>
-                    <button class="tab-btn" data-tab="vendas">Vendas</button>
-                    <button class="tab-btn" data-tab="compras">Compras</button>
-                    <button class="tab-btn" data-tab="estoque">Estoque</button>
-                    <button class="tab-btn" data-tab="financeiro">Financeiro</button>
-                    <button class="tab-btn" data-tab="fornecedores">Fornecedores</button>
-                </div>
-                <div id="tab-content-container"></div>
-            </main>
-        </div>
-    `;
-    render('app-root', html);
-    el('logoutButton').addEventListener('click', () => auth.signOut());
-    
-    document.querySelectorAll('.tab-btn').forEach(tab => {
-        tab.addEventListener('click', (e) => {
-            document.querySelector('.tab-btn.active').classList.remove('active');
-            e.target.classList.add('active');
-            const renderFunctionName = 'render' + e.target.dataset.tab.charAt(0).toUpperCase() + e.target.dataset.tab.slice(1);
-            if(window[renderFunctionName]) window[renderFunctionName]();
-        });
-    });
-    renderDashboard();
-}
+function renderLogin() {
+  app.innerHTML = `
+    <div class="flex items-center justify-center min-h-screen bg-dark">
+      <div class="bg-secondary p-8 rounded-lg shadow-lg w-full max-w-md">
+        <h1 class="text-2xl font-bold text-center mb-6 accent-text">Techmess Admin</h1>
+        <form id="loginForm" class="space-y-4">
+          <div>
+            <label class="block text-sm font-medium mb-1">E-mail</label>
+            <input type="email" id="email" class="input-dark w-full" required />
+          </div>
+          <div>
+            <label class="block text-sm font-medium mb-1">Senha</label>
+            <input type="password" id="password" class="input-dark w-full" required />
+          </div>
+          <button type="submit" class="btn-neon w-full py-3 mt-4">Entrar</button>
+        </form>
+        <p id="loginError" class="text-red-400 text-sm mt-2 hidden">Erro ao fazer login.</p>
+      </div>
+    </div>
+  `;
 
-// =================================================================================
-// AUTENTICAÇÃO
-// =================================================================================
-function showAuthModal() {
-    const html = `
-        <div id="authModal" class="modal-container">
-            <div class="modal-content max-w-sm">
-                <h2 class="modal-title">Acesso Administrativo</h2>
-                <form id="loginForm" class="text-left">
-                    <div class="mb-4"><label for="emailInput" class="label">E-mail</label><input type="email" id="emailInput" required class="form-input"></div>
-                    <div class="mb-6"><label for="passwordInput" class="label">Senha</label><input type="password" id="passwordInput" required class="form-input"></div>
-                    <button type="submit" class="w-full btn-primary bg-cyan-500 text-black">Entrar</button>
-                    <p id="loginError" class="text-red-500 text-sm mt-4 text-center h-4"></p>
-                </form>
-                <button type="button" class="modal-close-btn" onclick="toggleModal('authModal', false)">Fechar</button>
-            </div>
-        </div>
-    `;
-    renderModal(html);
-    toggleModal('authModal', true);
-    el('loginForm').addEventListener('submit', handleLogin);
-}
-
-function handleLogin(e) {
+  document.getElementById('loginForm').addEventListener('submit', async (e) => {
     e.preventDefault();
-    const loginError = el('loginError');
-    loginError.textContent = '';
-    auth.signInWithEmailAndPassword(el('emailInput').value, el('passwordInput').value)
-        .catch(err => {
-            loginError.textContent = 'E-mail ou senha incorretos.';
-            console.error(err);
-        });
+    const email = document.getElementById('email').value;
+    const password = document.getElementById('password').value;
+    const errorEl = document.getElementById('loginError');
+
+    try {
+      await auth.signInWithEmailAndPassword(email, password);
+    } catch (err) {
+      errorEl.classList.remove('hidden');
+      errorEl.textContent = err.message;
+    }
+  });
 }
 
-// =================================================================================
-// LISTENERS DE DADOS DO FIREBASE
-// =================================================================================
-function initializeDataListeners() {
-    const refs = {
-        inventory: db.ref('estoque'),
-        suppliers: db.ref('fornecedores'),
-        purchases: db.ref('compras'),
-        sales: db.ref('vendas'),
-        cashFlow: db.ref('fluxoDeCaixa')
+// === VITRINE PÚBLICA ===
+function renderPublicStore() {
+  app.innerHTML = `
+    <header class="bg-primary p-4 flex justify-between items-center">
+      <h1 class="text-xl font-bold accent-text">Techmess</h1>
+      <button id="goToERP" class="btn-neon text-sm">Admin</button>
+    </header>
+    <main class="p-6 flex-1">
+      <h2 class="text-2xl font-bold mb-6">Produtos</h2>
+      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6" id="productGrid"></div>
+    </main>
+    <footer class="p-4 text-center text-gray-500 text-sm">© 2025 Techmess. Todos os direitos reservados.</footer>
+  `;
+
+  document.getElementById('goToERP').onclick = () => {
+    currentScreen = 'dashboard';
+    renderERP();
+  };
+
+  renderProductGrid();
+}
+
+function renderProductGrid() {
+  const grid = document.getElementById('productGrid');
+  grid.innerHTML = products.length === 0
+    ? '<p>Nenhum produto disponível.</p>'
+    : products.map(p => `
+      <div class="bg-secondary p-4 rounded-lg">
+        <img src="${p.imageUrl || 'https://res.cloudinary.com/dmuvm1o6m/image/upload/v1680000000/placeholder.jpg'}" 
+             alt="${p.name}" class="w-full h-40 object-cover rounded mb-3">
+        <h3 class="font-semibold">${p.name}</h3>
+        <p class="text-accent font-bold">R$ ${parseFloat(p.price).toFixed(2)}</p>
+        <p class="text-xs text-gray-400">${p.description || ''}</p>
+        <span class="${p.quantity === 0 ? 'badge-out' : p.quantity <= p.alertLevel ? 'badge-low' : 'badge-in'}">
+          ${p.quantity === 0 ? 'Esgotado' : `${p.quantity} em estoque`}
+        </span>
+        ${p.quantity > 0 ? `<button class="btn-neon mt-2 w-full" onclick="addToCart('${p.id}')">Adicionar ao Carrinho</button>` : ''}
+      </div>
+    `).join('');
+}
+
+function addToCart(productId) {
+  const product = products.find(p => p.id === productId);
+  const item = cart.find(i => i.id === productId);
+  if (item) {
+    item.qty++;
+  } else {
+    cart.push({ ...product, qty: 1 });
+  }
+  alert(`${product.name} adicionado ao carrinho!`);
+}
+
+// === CHECKOUT MODAL ===
+window.openCheckout = function() {
+  const modal = document.createElement('div');
+  modal.classList.add('modal-overlay');
+  modal.innerHTML = `
+    <div class="bg-secondary p-6 rounded-lg shadow-lg w-full max-w-md">
+      <h3 class="text-xl font-bold mb-4">Finalizar Pedido</h3>
+      <form id="checkoutForm">
+        <div class="mb-4">
+          <label>Nome</label>
+          <input type="text" id="customerName" class="input-dark w-full" required>
+        </div>
+        <div class="mb-4">
+          <label>WhatsApp (com DDD)</label>
+          <input type="text" id="whatsapp" class="input-dark w-full" placeholder="11999999999" required>
+        </div>
+        <div class="mb-4">
+          <h4>Itens:</h4>
+          <ul class="text-sm">
+            ${cart.map(i => `<li>${i.qty}x ${i.name} - R$ ${(i.price * i.qty).toFixed(2)}</li>`).join('')}
+          </ul>
+          <p class="font-bold mt-2">Total: R$ ${cart.reduce((acc, i) => acc + i.price * i.qty, 0).toFixed(2)}</p>
+        </div>
+        <div class="flex justify-end space-x-2">
+          <button type="button" id="cancelCheckout" class="btn-neon">Cancelar</button>
+          <button type="submit" class="btn-neon">Enviar no WhatsApp</button>
+        </div>
+      </form>
+    </div>
+  `;
+  document.body.appendChild(modal);
+
+  document.getElementById('cancelCheckout').onclick = () => document.body.removeChild(modal);
+  document.getElementById('checkoutForm').onsubmit = (e) => {
+    e.preventDefault();
+    const name = document.getElementById('customerName').value;
+    const phone = document.getElementById('whatsapp').value;
+    const message = encodeURIComponent(
+      `*Novo Pedido - Techmess*\nCliente: ${name}\nItens:\n${cart.map(i => `${i.qty}x ${i.name}`).join('\n')}\nTotal: R$ ${cart.reduce((acc, i) => acc + i.price * i.qty, 0).toFixed(2)}`
+    );
+    window.open(`https://wa.me/${phone}?text=${message}`, '_blank');
+    
+    // Salvar no Firebase
+    db.ref('sales').push({
+      customerId: name,
+      items: cart.map(i => ({ id: i.id, name: i.name, qty: i.qty, price: i.price })),
+      total: cart.reduce((acc, i) => acc + i.price * i.qty, 0),
+      date: new Date().toISOString().split('T')[0],
+      status: 'pending',
+      customerName: name,
+      whatsapp: phone
+    });
+
+    cart = [];
+    document.body.removeChild(modal);
+  };
+};
+
+// === ERP ===
+function renderERP() {
+  app.innerHTML = `
+    <div class="flex h-full">
+      <aside class="w-64 bg-primary h-full min-h-screen p-4 hidden md:block">
+        <h1 class="text-xl font-bold accent-text mb-8">Techmess ERP</h1>
+        <nav class="space-y-2">${generateNav()}</nav>
+      </aside>
+      <div class="md:hidden bg-primary p-4 flex justify-between items-center">
+        <h1 class="text-lg font-bold accent-text">Techmess</h1>
+        <button id="menuToggle" class="text-accent">☰</button>
+      </div>
+      <div id="mobileMenu" class="fixed inset-0 bg-black bg-opacity-75 z-40 hidden">
+        <div class="bg-primary w-64 h-full p-4">
+          <button id="closeMenu" class="float-right text-accent mb-4">✕</button>
+          <nav class="space-y-4 mt-8">${generateNav()}</nav>
+        </div>
+      </div>
+      <main class="flex-1 p-6 bg-dark overflow-y-auto" id="mainContent"></main>
+    </div>
+  `;
+
+  setupNavEvents();
+  navigateTo(currentScreen);
+}
+
+function generateNav() {
+  return `
+    <a href="#" data-screen="dashboard" class="block p-2 rounded hover:text-accent transition">Dashboard</a>
+    <a href="#" data-screen="sales" class="block p-2 rounded hover:text-accent transition">Vendas</a>
+    <a href="#" data-screen="purchases" class="block p-2 rounded hover:text-accent transition">Compras</a>
+    <a href="#" data-screen="inventory" class="block p-2 rounded hover:text-accent transition">Estoque</a>
+    <a href="#" data-screen="finance" class="block p-2 rounded hover:text-accent transition">Financeiro</a>
+    <a href="#" data-screen="suppliers" class="block p-2 rounded hover:text-accent transition">Fornecedores</a>
+    <a href="#" id="logoutBtn" class="block p-2 rounded text-red-400 hover:text-red-200 transition">Sair</a>
+  `;
+}
+
+function setupNavEvents() {
+  document.querySelectorAll('[data-screen]').forEach(link => {
+    link.addEventListener('click', (e) => {
+      e.preventDefault();
+      navigateTo(e.target.getAttribute('data-screen'));
+    });
+  });
+  document.getElementById('logoutBtn').addEventListener('click', logout);
+  document.getElementById('menuToggle').addEventListener('click', () => {
+    document.getElementById('mobileMenu').classList.remove('hidden');
+  });
+  document.getElementById('closeMenu').addEventListener('click', () => {
+    document.getElementById('mobileMenu').classList.add('hidden');
+  });
+}
+
+async function navigateTo(screen) {
+  currentScreen = screen;
+  const main = document.getElementById('mainContent');
+  main.innerHTML = '<div class="flex items-center justify-center h-64"><div class="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-accent"></div></div>';
+  await loadData();
+  setTimeout(() => {
+    switch (screen) {
+      case 'dashboard': renderDashboard(); break;
+      case 'inventory': renderInventory(); break;
+      case 'sales': renderSales(); break;
+      case 'purchases': renderPurchases(); break;
+      case 'finance': renderFinance(); break;
+      case 'suppliers': renderSuppliers(); break;
+      default: renderDashboard();
+    }
+  }, 200);
+}
+
+// === MÓDULOS ERP ===
+function renderDashboard() {
+  const today = new Date().toISOString().split('T')[0];
+  const salesToday = sales.filter(s => s.date === today && s.status === 'confirmed');
+  const revenue = salesToday.reduce((acc, s) => acc + s.total, 0);
+  const avgTicket = salesToday.length ? (revenue / salesToday.length).toFixed(2) : '0.00';
+  const lowStock = products.filter(p => p.quantity <= p.alertLevel);
+
+  document.getElementById('mainContent').innerHTML = `
+    <h2 class="text-2xl font-bold mb-6">Dashboard</h2>
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+      <div class="kpi-card"><h3>Faturamento Hoje</h3><p>R$ ${revenue.toFixed(2)}</p></div>
+      <div class="kpi-card"><h3>Vendas Hoje</h3><p>${salesToday.length}</p></div>
+      <div class="kpi-card"><h3>Ticket Médio</h3><p>R$ ${avgTicket}</p></div>
+    </div>
+    ${lowStock.length > 0 ? `
+    <div class="bg-red-900 bg-opacity-50 p-4 rounded border border-red-600">
+      <h3 class="font-semibold text-red-300">⚠️ Estoque Baixo</h3>
+      <ul>${lowStock.map(p => `<li>${p.name} (${p.quantity})</li>`).join('')}</ul>
+    </div>` : ''}
+  `;
+}
+
+function renderInventory() {
+  const main = document.getElementById('mainContent');
+  main.innerHTML = `
+    <div class="flex justify-between items-center mb-6">
+      <h2 class="text-2xl font-bold">Estoque</h2>
+      <button id="btnAddProduct" class="btn-neon">+ Novo Produto</button>
+    </div>
+    <div class="table-container">
+      <table><thead><tr>
+        <th>Imagem</th>
+        <th>Nome</th>
+        <th>Preço</th>
+        <th>Quantidade</th>
+        <th>Status</th>
+        <th>Ações</th>
+      </tr></thead>
+      <tbody id="productList"></tbody>
+      </table>
+    </div>
+  `;
+  renderProductList();
+  document.getElementById('btnAddProduct').addEventListener('click', openProductModal);
+}
+
+function renderProductList() {
+  const tbody = document.getElementById('productList');
+  tbody.innerHTML = products.map(p => {
+    const status = p.quantity === 0 ? 'Esgotado' : p.quantity <= p.alertLevel ? 'Baixo' : 'Normal';
+    const badge = p.quantity === 0 ? 'badge-out' : p.quantity <= p.alertLevel ? 'badge-low' : 'badge-in';
+    return `
+      <tr>
+        <td><img src="${p.imageUrl}" class="w-10 h-10 object-cover rounded" /></td>
+        <td>${p.name}</td>
+        <td>R$ ${p.price}</td>
+        <td>${p.quantity}</td>
+        <td><span class="${badge}">${status}</span></td>
+        <td>
+          <button class="text-accent text-sm mr-2" onclick="openProductModal('${p.id}')">Editar</button>
+          <button class="text-red-400 text-sm" onclick="deleteProduct('${p.id}')">Excluir</button>
+          <button class="text-blue-400 text-sm ml-2" onclick="viewKardex('${p.id}')">Kardex</button>
+        </td>
+      </tr>
+    `;
+  }).join('');
+}
+
+function openProductModal(productId = null) {
+  const product = productId ? products.find(p => p.id === productId) : null;
+  const modal = document.createElement('div');
+  modal.classList.add('modal-overlay');
+  modal.innerHTML = `
+    <div class="bg-secondary p-6 rounded-lg shadow-lg w-full max-w-lg">
+      <h3 class="text-xl font-bold mb-4">${product ? 'Editar' : 'Novo'} Produto</h3>
+      <form id="productForm">
+        <input type="hidden" id="productId" value="${product?.id || ''}">
+        <div class="mb-4"><label>Nome</label><input type="text" id="name" class="input-dark w-full" value="${product?.name || ''}" required></div>
+        <div class="mb-4"><label>Preço</label><input type="number" step="0.01" id="price" class="input-dark w-full" value="${product?.price || ''}" required></div>
+        <div class="mb-4"><label>Quantidade</label><input type="number" id="quantity" class="input-dark w-full" value="${product?.quantity || 0}" required></div>
+        <div class="mb-4"><label>Alerta</label><input type="number" id="alertLevel" class="input-dark w-full" value="${product?.alertLevel || 5}" required></div>
+        <div class="mb-4"><label>Descrição</label><textarea id="description" class="input-dark w-full" rows="2">${product?.description || ''}</textarea></div>
+        <div class="mb-4"><label>Imagem</label><input type="text" id="imageUrl" class="input-dark w-full" value="${product?.imageUrl || ''}"><button type="button" id="uploadImage" class="btn-neon mt-1">Enviar Imagem</button></div>
+        <div class="flex justify-end space-x-2">
+          <button type="button" id="cancelProduct" class="btn-neon">Cancelar</button>
+          <button type="submit" class="btn-neon">Salvar</button>
+        </div>
+      </form>
+    </div>
+  `;
+  document.body.appendChild(modal);
+
+  document.getElementById('cancelProduct').onclick = () => document.body.removeChild(modal);
+  document.getElementById('uploadImage').onclick = () => {
+    const widget = cloudinary.createUploadWidget({
+      cloudName: cloudName,
+      uploadPreset: uploadPreset
+    }, (error, result) => {
+      if (!error && result && result.event === "success") {
+        document.getElementById('imageUrl').value = result.info.secure_url;
+      }
+    });
+    widget.open();
+  };
+
+  document.getElementById('productForm').onsubmit = async (e) => {
+    e.preventDefault();
+    const data = {
+      name: document.getElementById('name').value,
+      price: parseFloat(document.getElementById('price').value),
+      quantity: parseInt(document.getElementById('quantity').value),
+      alertLevel: parseInt(document.getElementById('alertLevel').value),
+      description: document.getElementById('description').value,
+      imageUrl: document.getElementById('imageUrl').value,
+      id: document.getElementById('productId').value
     };
 
-    for (const key in refs) {
-        if (state.listeners[key]) refs[key].off('value', state.listeners[key]);
-        
-        const listener = snapshot => {
-            state[key] = snapshot.val() || {};
-            const activeTab = document.querySelector('.tab-btn.active')?.dataset.tab;
-            if (activeTab) {
-                 const renderFunctionName = 'render' + activeTab.charAt(0).toUpperCase() + activeTab.slice(1);
-                 if(window[renderFunctionName]) window[renderFunctionName]();
-            }
-        };
-        refs[key].on('value', listener);
-        state.listeners[key] = listener;
-    }
+    const ref = data.id ? db.ref(`products/${data.id}`) : db.ref('products').push();
+    if (!data.id) data.id = ref.key;
+    await ref.set(data);
+    await loadData();
+    renderProductList();
+    document.body.removeChild(modal);
+  };
 }
 
-function stopAllListeners() {
-    for (const key in state.listeners) {
-        db.ref(key.replace(/([A-Z])/g, '-$1').toLowerCase()).off('value', state.listeners[key]);
-    }
-    state.listeners = {};
+async function deleteProduct(id) {
+  if (confirm('Excluir?')) {
+    await db.ref(`products/${id}`).remove();
+    await loadData();
+    renderProductList();
+  }
 }
 
-// =================================================================================
-// MÓDULOS DO PAINEL DE GESTÃO (Funções de Renderização)
-// =================================================================================
+function viewKardex(productId) {
+  const product = products.find(p => p.id === productId);
+  const movements = [
+    ...sales.filter(s => s.items.some(i => i.id === productId)).map(s => ({ type: 'Saída', qty: s.items.find(i => i.id === productId).qty, date: s.date, ref: `Venda #${s.id}` })),
+    ...purchases.filter(p => p.items.some(i => i.id === productId)).map(p => ({ type: 'Entrada', qty: p.items.find(i => i.id === productId).qty, date: p.date, ref: `Compra #${p.id}` }))
+  ].sort((a, b) => new Date(b.date) - new Date(a.date));
 
-function renderDashboard() {
-    const html = `
-        <div id="dashboard-content">
-            <h2 class="text-3xl font-bold text-white mb-6">Dashboard</h2>
-            <!-- Conteúdo do Dashboard aqui -->
-        </div>`;
-    render('tab-content-container', html);
+  const modal = document.createElement('div');
+  modal.classList.add('modal-overlay');
+  modal.innerHTML = `
+    <div class="bg-secondary p-6 rounded-lg shadow-lg w-full max-w-lg">
+      <h3 class="text-xl font-bold mb-4">Kardex - ${product.name}</h3>
+      <div class="table-container"><table><tr><th>Tipo</th><th>Quantidade</th><th>Data</th><th>Referência</th></tr>
+      ${movements.map(m => `<tr><td>${m.type}</td><td>${m.qty}</td><td>${m.date}</td><td>${m.ref}</td></tr>`).join('')}
+      </table></div>
+      <button onclick="this.parentElement.parentElement.remove()" class="btn-neon mt-4">Fechar</button>
+    </div>
+  `;
+  document.body.appendChild(modal);
 }
 
-function renderVendas() {
-    const html = `
-        <div id="vendas-content">
-            <h2 class="text-3xl font-bold text-white mb-6">Pedidos e Vendas</h2>
-            <!-- Conteúdo de Vendas aqui -->
-        </div>`;
-    render('tab-content-container', html);
+// === VENDAS, FINANCEIRO, ETC. (implementações similares) → Podem ser expandidas
+
+function logout() {
+  auth.signOut().then(() => {
+    currentUser = null;
+    currentScreen = 'home';
+    renderApp();
+  });
 }
 
-function renderCompras() {
-    const html = `
-        <div id="compras-content">
-            <h2 class="text-3xl font-bold text-white mb-6">Compras</h2>
-            <!-- Conteúdo de Compras aqui -->
-        </div>`;
-    render('tab-content-container', html);
-}
+// === INICIALIZAÇÃO ===
+auth.onAuthStateChanged(user => {
+  currentUser = user;
+  setTimeout(() => {
+    document.getElementById('loading')?.remove();
+    renderApp();
+  }, 800);
+});
 
-function renderEstoque() {
-    const html = `
-        <div id="estoque-content">
-            <h2 class="text-3xl font-bold text-white mb-6">Estoque</h2>
-            <!-- Conteúdo de Estoque aqui -->
-        </div>`;
-    render('tab-content-container', html);
-}
-
-function renderFinanceiro() {
-    const html = `
-        <div id="financeiro-content">
-            <h2 class="text-3xl font-bold text-white mb-6">Financeiro</h2>
-            <!-- Conteúdo de Financeiro aqui -->
-        </div>`;
-    render('tab-content-container', html);
-}
-
-function renderFornecedores() {
-    const html = `
-        <div id="fornecedores-content">
-            <h2 class="text-3xl font-bold text-white mb-6">Fornecedores</h2>
-            <!-- Conteúdo de Fornecedores aqui -->
-        </div>`;
-    render('tab-content-container', html);
-}
-
-
-// Funções `window.` para serem acessíveis no HTML gerado dinamicamente
-window.toggleModal = toggleModal;
-
-// Exemplo da função displayProducts (vitrine) completa e funcional
-function displayProducts() {
-    const productGrid = el('product-grid');
-    if (!productGrid) return;
-    db.ref('estoque').orderByChild('createdAt').on('value', snapshot => {
-        productGrid.innerHTML = '';
-        state.inventory = snapshot.val() || {};
-        if (!snapshot.exists()) {
-            productGrid.innerHTML = '<p class="col-span-full text-center text-gray-500 py-10">Nenhum produto cadastrado.</p>';
-            return;
-        }
-        const products = [];
-        snapshot.forEach(child => products.push({ id: child.key, ...child.val() }));
-        products.reverse().forEach(product => {
-            const outOfStock = product.quantity <= 0;
-            productGrid.innerHTML += `
-                <div class="bg-gray-800 rounded-lg shadow-lg overflow-hidden border border-gray-700/50 flex flex-col">
-                    <div class="relative">
-                        <img src="${product.imageUrl || 'https://placehold.co/600x400/111827/FFF?text=Techmess'}" alt="${product.name}" class="w-full h-56 object-cover">
-                        ${outOfStock ? '<div class="absolute inset-0 bg-black/70 flex items-center justify-center"><span class="text-white font-bold text-xl">ESGOTADO</span></div>' : ''}
-                    </div>
-                    <div class="p-4 flex flex-col flex-grow">
-                        <h3 class="font-semibold text-lg text-white flex-grow">${product.name}</h3>
-                        <p class="text-cyan-400 mt-2 text-2xl font-bold">${formatCurrency(product.price)}</p>
-                        <button data-product-id="${product.id}" ${outOfStock ? 'disabled' : ''} class="add-to-cart-btn mt-4 w-full btn-primary bg-cyan-600">Adicionar ao Carrinho</button>
-                    </div>
-                </div>`;
-        });
-        productGrid.addEventListener('click', e => { if (e.target.classList.contains('add-to-cart-btn')) addToCart(e.target.dataset.productId); });
-    });
-}
+// === FUNÇÕES GLOBAIS ===
+window.addToCart = addToCart;
+window.openCheckout = openCheckout;
+window.openProductModal = openProductModal;
+window.deleteProduct = deleteProduct;
+window.viewKardex = viewKardex;
+window.logout = logout;
