@@ -1,700 +1,1092 @@
-// ================================
-// 🚀 TECHMESS ERP + E-COMMERCE
-// Com Detetive de Erros Integrado
-// ================================
+/**
+ * Techmess ERP - app.js
+ * Senior Software Developer: Parceiro de Programacao
+ * Description: Core logic for the Techmess ERP & E-commerce SPA.
+ * Handles Firebase integration, UI manipulation, and business logic for all modules.
+ */
 
-// === CONFIGURAÇÃO DO FIREBASE ===
+// --- CONFIGURAÇÃO E INICIALIZAÇÃO ---
 const firebaseConfig = {
-  apiKey: "AIzaSyARb-0QE9QcYD2OjkCsOj0pmKTgkJQRlSg",
-  authDomain: "vipcell-gestor.firebaseapp.com",
-  projectId: "vipcell-gestor",
-  storageBucket: "vipcell-gestor.appspot.com",
-  messagingSenderId: "259960306679",
-  appId: "1:259960306679:web:ad7a41cd1842862f7f8cf2",
-  databaseURL: "https://vipcell-gestor-default-rtdb.firebaseio.com/"
+    apiKey: "AIzaSyARb-0QE9QcYD2OjkCsOj0pmKTgkJQRlSg",
+    authDomain: "vipcell-gestor.firebaseapp.com",
+    databaseURL: "https://vipcell-gestor-default-rtdb.firebaseio.com",
+    projectId: "vipcell-gestor",
+    storageBucket: "vipcell-gestor.firebasestorage.app",
+    messagingSenderId: "259960306679",
+    appId: "1:259960306679:web:ad7a41cd1842862f7f8cf2"
 };
 
-// Inicializar Firebase
-try {
-  firebase.initializeApp(firebaseConfig);
-} catch (e) {
-  // Pode já estar inicializado
-}
 
+const CLOUDINARY_CLOUD_NAME = 'dmuvm1o6m';
+const CLOUDINARY_UPLOAD_PRESET = 'poh3ej4m';
+const CLOUDINARY_API_URL = `https://api.cloudinary.com/v1_1/${CLOUDINARY_CLOUD_NAME}/image/upload`;
+
+// Inicializa Firebase
+firebase.initializeApp(firebaseConfig);
 const auth = firebase.auth();
-const db = firebase.database();
+const database = firebase.database();
 
-// === CLOUDINARY ===
-const cloudName = 'dmuvm1o6m';
-const uploadPreset = 'poh3ej4m';
+// --- VARIÁVEIS GLOBAIS DE ESTADO ---
+let cart = {};
+let products = {};
+let suppliers = {};
+let customers = {}; // <-- Novo estado para clientes
+let currentPurchaseItems = {};
+let salesReportData = [];
+let isErpInitialized = false;
 
-// === ESTADO GLOBAL ===
-let currentUser = null;
-let currentScreen = 'home';
-let products = [];
-let suppliers = [];
-let sales = [];
-let purchases = [];
-let accounts = [];
-let cart = [];
+// --- SELETORES DE ELEMENTOS DO DOM (CACHE) ---
+const getElem = (id) => document.getElementById(id);
+const querySel = (selector) => document.querySelector(selector);
+const querySelAll = (selector) => document.querySelectorAll(selector);
 
-// === DOM ===
-const app = document.getElementById('app');
-
-// ================================
-// 🔍 TECHMESS DETECTIVE v1.0
-// Sistema inteligente de diagnóstico e correção de erros
-// ================================
-
-class TechmessDetective {
-  constructor() {
-    this.report = {
-      firebaseConfig: false,
-      databaseConnection: false,
-      authState: false,
-      dataLoaded: false,
-      cloudinaryReady: false,
-      errors: [],
-      warnings: []
-    };
-  }
-
-  async investigate() {
-    console.log("🔍 Techmess Detective: Iniciando investigação...");
-
-    // 1. Verificar configuração do Firebase
-    this.checkFirebaseConfig();
-
-    // 2. Testar conexão com o banco
-    if (this.report.firebaseConfig) {
-      await this.testDatabaseAccess();
-    }
-
-    // 3. Verificar estado de autenticação
-    await this.checkAuthState();
-
-    // 4. Tentar carregar dados
-    if (this.report.databaseConnection && this.report.authState) {
-      await this.loadDataSafely();
-    }
-
-    // 5. Verificar Cloudinary
-    this.checkCloudinary();
-
-    // Exibir relatório
-    this.presentReport();
-  }
-
-  checkFirebaseConfig() {
-    const required = ['apiKey', 'authDomain', 'projectId', 'databaseURL'];
-    const missing = required.filter(key => !firebaseConfig[key]);
-
-    if (missing.length === 0) {
-      this.report.firebaseConfig = true;
-    } else {
-      this.report.errors.push(`Firebase Config: faltando ${missing.join(', ')}`);
-    }
-  }
-
-  async testDatabaseAccess() {
-    try {
-      const testRef = db.ref('.info/connected');
-      const snapshot = await Promise.race([
-        testRef.once('value'),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 5000))
-      ]);
-      if (snapshot.val() === true) {
-        this.report.databaseConnection = true;
-      } else {
-        this.report.errors.push("Não foi possível conectar ao Realtime Database.");
-      }
-    } catch (err) {
-      this.report.errors.push(`Erro de conexão: ${err.message || 'Timeout ou rede falhou'}`);
-    }
-  }
-
-  async checkAuthState() {
-    return new Promise(resolve => {
-      const unsubscribe = auth.onAuthStateChanged(user => {
-        currentUser = user;
-        this.report.authState = true;
-        if (!user) {
-          this.report.warnings.push("Nenhum usuário logado. Acesse como visitante ou faça login.");
+const ui = {
+    publicView: getElem('public-view'),
+    managementPanel: getElem('management-panel'),
+    authButton: getElem('auth-button'),
+    nav: {
+        home: getElem('nav-home'),
+        shop: getElem('nav-shop'),
+        cart: getElem('nav-cart'),
+        dashboard: getElem('nav-dashboard'),
+        cartItemCount: getElem('cart-item-count')
+    },
+    shop: {
+        productList: getElem('product-list')
+    },
+    cart: {
+        modal: getElem('cart-modal'),
+        closeButton: getElem('close-cart-modal'),
+        items: getElem('cart-items'),
+        total: getElem('cart-total'),
+        checkoutButton: getElem('checkout-button')
+    },
+    checkout: {
+        modal: getElem('checkout-modal'),
+        closeButton: getElem('close-checkout-modal'),
+        nameInput: getElem('customer-name'),
+        whatsappInput: getElem('customer-whatsapp'),
+        submitButton: getElem('submit-checkout')
+    },
+    erp: {
+        tabs: querySelAll('.tab-button'),
+        contents: querySelAll('.tab-content'),
+        dashboard: {
+            content: getElem('dashboard-content'),
+            monthlyRevenue: getElem('monthly-revenue'),
+            dailySales: getElem('daily-sales'),
+            lowStockAlerts: getElem('low-stock-alerts')
+        },
+        sales: {
+            content: getElem('sales-content'),
+            pendingOrders: getElem('pending-orders'),
+            historyList: getElem('sales-history-list')
+        },
+        purchases: {
+            // ... (sem alterações aqui)
+        },
+        stock: {
+            // ... (sem alterações aqui)
+        },
+        customers: { // <-- Nova seção de seletores para clientes
+            content: getElem('customers-content'),
+            addButton: getElem('add-customer-button'),
+            list: getElem('customer-list'),
+            modal: getElem('customer-form-modal'),
+            closeModalButton: getElem('close-customer-form-modal'),
+            saveButton: getElem('save-customer-button'),
+            title: getElem('customer-form-title'),
+            idInput: getElem('customer-id'),
+            nameInput: getElem('new-customer-name'),
+            whatsappInput: getElem('new-customer-whatsapp'),
+            emailInput: getElem('new-customer-email'),
+            notesInput: getElem('new-customer-notes')
+        },
+        finance: {
+            // ... (sem alterações aqui)
+        },
+        suppliers: {
+            // ... (sem alterações aqui)
+        },
+        // Adicione outros seletores se necessário, mantendo a estrutura
+        purchases: {
+            content: getElem('purchases-content'),
+            newButton: getElem('new-purchase-button'),
+            list: getElem('purchase-list'),
+            modal: getElem('purchase-form-modal'),
+            closeModalButton: getElem('close-purchase-form-modal'),
+            saveButton: getElem('save-purchase-button'),
+            supplierSelect: getElem('purchase-supplier'),
+            productSelect: getElem('purchase-product'),
+            quantityInput: getElem('purchase-quantity'),
+            priceInput: getElem('purchase-unit-price'),
+            addItemButton: getElem('add-item-to-purchase-button'),
+            itemsList: getElem('purchase-items-list'),
+            total: getElem('purchase-total'),
+            invoiceInput: getElem('purchase-invoice-number'),
+            dateInput: getElem('purchase-date'),
+            paymentMethodSelect: getElem('purchase-payment-method')
+        },
+        stock: {
+            content: getElem('stock-content'),
+            addButton: getElem('add-product-button'),
+            list: getElem('product-management-list'),
+            modal: getElem('product-form-modal'),
+            closeModalButton: getElem('close-product-form-modal'),
+            saveButton: getElem('save-product-button'),
+            title: getElem('product-form-title'),
+            idInput: getElem('product-id'),
+            nameInput: getElem('product-name'),
+            priceInput: getElem('product-price'),
+            quantityInput: getElem('product-quantity'),
+            descriptionInput: getElem('product-description'),
+            alertLevelInput: getElem('product-alert-level'),
+            imageUploadInput: getElem('product-image-upload')
+        },
+        finance: {
+            content: getElem('finance-content'),
+            transactions: getElem('financial-transactions'),
+            cashBalance: getElem('cash-balance'),
+            reportStartDate: getElem('report-start-date'),
+            reportEndDate: getElem('report-end-date'),
+            generateReportBtn: getElem('generate-report-button'),
+            exportCsvBtn: getElem('export-csv-button'),
+            reportResults: getElem('report-results')
+        },
+        suppliers: {
+            content: getElem('suppliers-content'),
+            addButton: getElem('add-supplier-button'),
+            list: getElem('supplier-list'),
+            modal: getElem('supplier-form-modal'),
+            closeModalButton: getElem('close-supplier-form-modal'),
+            saveButton: getElem('save-supplier-button'),
+            title: getElem('supplier-form-title'),
+            idInput: getElem('supplier-id'),
+            nameInput: getElem('supplier-name'),
+            contactInput: getElem('supplier-contact')
         }
-        unsubscribe();
-        resolve();
-      }, err => {
-        this.report.errors.push(`Erro de autenticação: ${err.message}`);
-        resolve();
-      });
+    }
+};
+
+// --- FUNÇÕES DE UI ---
+
+function switchView(viewToShow) {
+    ui.publicView.classList.toggle('hidden', viewToShow !== 'public');
+    ui.managementPanel.classList.toggle('hidden', viewToShow !== 'management');
+    if (viewToShow === 'management') {
+        switchTab('dashboard');
+    }
+}
+
+function switchTab(tabId) {
+    ui.erp.contents.forEach(content => content.classList.add('hidden'));
+    getElem(`${tabId}-content`).classList.remove('hidden');
+
+    ui.erp.tabs.forEach(button => {
+        button.classList.remove('border-cyan-400', 'text-white');
+        button.classList.add('border-transparent', 'text-gray-300');
     });
-  }
-
-  async loadDataSafely() {
-    const paths = ['products', 'sales', 'suppliers', 'purchases', 'accounts'];
-    let hasData = false;
-
-    for (const path of paths) {
-      try {
-        const snapshot = await Promise.race([
-          db.ref(path).once('value'),
-          new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 5000))
-        ]);
-        window[path] = Object.values(snapshot.val() || {});
-        if (Object.keys(snapshot.val() || {}).length > 0) {
-          hasData = true;
-        }
-      } catch (err) {
-        this.report.errors.push(`Erro ao ler ${path}: ${err.message}`);
-      }
+    const activeButton = querySel(`button[data-tab="${tabId}"]`);
+    if (activeButton) {
+        activeButton.classList.remove('border-transparent', 'text-gray-300');
+        activeButton.classList.add('border-cyan-400', 'text-white');
     }
+}
 
-    this.report.dataLoaded = hasData;
-    if (!hasData) {
-      this.report.warnings.push("Nenhum dado encontrado no banco. A aplicação usará modo de demonstração.");
-      this.loadDemoData();
-    }
-  }
+function toggleModal(modalElement, show) {
+    modalElement.classList.toggle('hidden', !show);
+}
 
-  loadDemoData() {
-    products = [
-      {
-        id: 'demo_001',
-        name: 'iPhone 15',
-        price: 5000,
-        quantity: 10,
-        alertLevel: 3,
-        description: 'Smartphone Apple de última geração',
-        imageUrl: 'https://res.cloudinary.com/dmuvm1o6m/image/upload/v1680000000/placeholder.jpg'
-      },
-      {
-        id: 'demo_002',
-        name: 'Smart TV 55"',
-        price: 3200,
-        quantity: 5,
-        alertLevel: 2,
-        description: 'TV 4K com Wi-Fi',
-        imageUrl: 'https://res.cloudinary.com/dmuvm1o6m/image/upload/v1680000000/placeholder.jpg'
-      },
-      {
-        id: 'demo_003',
-        name: 'Notebook Gamer',
-        price: 8000,
-        quantity: 3,
-        alertLevel: 2,
-        description: 'Intel i7, 16GB RAM, RTX 3060',
-        imageUrl: 'https://res.cloudinary.com/dmuvm1o6m/image/upload/v1680000000/placeholder.jpg'
-      }
-    ];
-    sales = [];
-    suppliers = [
-      { id: 'sup_001', name: 'Distribuidora TechGlobal', email: 'contato@techglobal.com' }
-    ];
-    purchases = [];
-    accounts = [];
-  }
+// --- AUTENTICAÇÃO E INICIALIZAÇÃO DO PAINEL ---
 
-  checkCloudinary() {
-    if (typeof cloudinary !== 'undefined') {
-      this.report.cloudinaryReady = true;
-    } else {
-      this.report.warnings.push("Cloudinary não carregado. Upload de imagens desativado.");
-    }
-  }
+function initializeErpPanel() {
+    if (isErpInitialized) return;
+    console.log("A inicializar dados do Painel de Gestão...");
+    loadStockManagement();
+    loadSupplierManagement();
+    loadCustomerManagement(); // <-- Carrega clientes
+    loadPurchases();
+    loadSales();
+    loadSalesHistory();
+    loadFinance();
+    calculateDailySalesAndMonthlyRevenue();
+    isErpInitialized = true;
+}
 
-  presentReport() {
-    const app = document.getElementById('app');
+auth.onAuthStateChanged(user => {
+    const isLoggedIn = !!user;
+    ui.authButton.textContent = isLoggedIn ? 'Logout' : 'Login';
+    ui.nav.dashboard.parentElement.classList.toggle('hidden', !isLoggedIn);
     
-    if (this.report.errors.length > 0) {
-      app.innerHTML = `
-        <div class="flex flex-col items-center justify-center min-h-screen bg-dark text-red-300 p-6">
-          <h1 class="text-2xl font-bold mb-4 text-red-400">🚨 Erro Detectado</h1>
-          <div class="bg-red-900 bg-opacity-30 p-6 rounded-lg max-w-lg w-full">
-            <h2 class="font-bold mb-2">Problemas encontrados:</h2>
-            <ul class="list-disc list-inside text-sm space-y-1 mb-4">
-              ${this.report.errors.map(e => `<li>${e}</li>`).join('')}
-            </ul>
-            <h3 class="font-semibold mt-4">Soluções:</h3>
-            <ol class="list-decimal list-inside text-sm space-y-1">
-              <li>Verifique sua conexão com a internet</li>
-              <li>No Firebase Console, vá para <strong>Realtime Database > Rules</strong> e use:
-<pre class="bg-black p-2 rounded text-xs mt-1">{
-  "rules": {
-    ".read": "auth != null",
-    ".write": "auth != null"
-  }
-}</pre>
-              </li>
-              <li>Adicione pelo menos um produto no banco de dados</li>
-              <li>Use <strong>Firebase Hosting</strong> em vez de GitHub Pages para evitar bloqueios</li>
-            </ol>
-            <button onclick="location.reload()" class="btn-neon mt-4 w-full">Tentar Novamente</button>
-          </div>
-        </div>
-      `;
-      console.error("Techmess Detective Report:", this.report);
-      return;
+    if (isLoggedIn) {
+        switchView('management');
+        initializeErpPanel();
+    } else {
+        switchView('public');
+        isErpInitialized = false;
     }
+});
 
-    if (this.report.warnings.length > 0) {
-      app.innerHTML = `
-        <div class="flex flex-col items-center justify-center min-h-screen bg-dark p-6">
-          <h1 class="text-2xl font-bold mb-4 accent-text">⚠️ Modo de Demonstração</h1>
-          <div class="bg-yellow-900 bg-opacity-30 p-6 rounded-lg max-w-lg w-full text-yellow-200">
-            <p class="mb-3">A aplicação está funcionando com dados de exemplo porque:</p>
-            <ul class="list-disc list-inside text-sm space-y-1 mb-4">
-              ${this.report.warnings.map(w => `<li>${w}</li>`).join('')}
-            </ul>
-            <button onclick="window.startApp()" class="btn-neon w-full">Continuar com Demo</button>
-          </div>
-        </div>
-      `;
-      window.startApp = () => {
-        renderApp();
-      };
-      return;
+function handleAuthClick() {
+    if (auth.currentUser) {
+        auth.signOut();
+    } else {
+        const email = prompt('Digite o seu e-mail:');
+        const password = prompt('Digite a sua senha:');
+        if (email && password) {
+            auth.signInWithEmailAndPassword(email, password)
+                .catch(error => alert('Erro de login: ' + error.message));
+        }
     }
-
-    // Tudo OK
-    renderApp();
-  }
 }
 
-// ================================
-// 🚀 FUNÇÕES DE RENDERIZAÇÃO
-// ================================
-
-function renderApp() {
-  if (!currentUser && currentScreen !== 'home') {
-    renderLogin();
-  } else if (currentScreen === 'home') {
-    renderPublicStore();
-  } else {
-    renderERP();
-  }
-}
-
-function renderLogin() {
-  app.innerHTML = `
-    <div class="flex items-center justify-center min-h-screen bg-dark">
-      <div class="bg-secondary p-8 rounded-lg shadow-lg w-full max-w-md">
-        <h1 class="text-2xl font-bold text-center mb-6 accent-text">Techmess Admin</h1>
-        <form id="loginForm" class="space-y-4">
-          <div>
-            <label class="block text-sm font-medium mb-1">E-mail</label>
-            <input type="email" id="email" class="input-dark w-full" required />
-          </div>
-          <div>
-            <label class="block text-sm font-medium mb-1">Senha</label>
-            <input type="password" id="password" class="input-dark w-full" required />
-          </div>
-          <button type="submit" class="btn-neon w-full py-3 mt-4">Entrar</button>
-        </form>
-        <p id="loginError" class="text-red-400 text-sm mt-2 hidden">Erro ao fazer login.</p>
-      </div>
-    </div>
-  `;
-
-  document.getElementById('loginForm').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const email = document.getElementById('email').value;
-    const password = document.getElementById('password').value;
-    const errorEl = document.getElementById('loginError');
-
-    try {
-      await auth.signInWithEmailAndPassword(email, password);
-    } catch (err) {
-      errorEl.classList.remove('hidden');
-      errorEl.textContent = err.message;
-    }
-  });
-}
-
-// === VITRINE PÚBLICA ===
-function renderPublicStore() {
-  app.innerHTML = `
-    <header class="bg-primary p-4 flex justify-between items-center">
-      <h1 class="text-xl font-bold accent-text">Techmess</h1>
-      <button id="goToERP" class="btn-neon text-sm">Admin</button>
-    </header>
-    <main class="p-6 flex-1">
-      <h2 class="text-2xl font-bold mb-6">Produtos</h2>
-      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6" id="productGrid"></div>
-      ${cart.length > 0 ? `<button onclick="openCheckout()" class="btn-neon mt-6">🛒 Ver Carrinho (${cart.reduce((acc, i) => acc + i.qty, 0)})</button>` : ''}
-    </main>
-    <footer class="p-4 text-center text-gray-500 text-sm">© 2025 Techmess. Todos os direitos reservados.</footer>
-  `;
-
-  document.getElementById('goToERP').onclick = () => {
-    currentScreen = 'dashboard';
-    renderERP();
-  };
-
-  renderProductGrid();
-}
-
-function renderProductGrid() {
-  const grid = document.getElementById('productGrid');
-  grid.innerHTML = products.length === 0
-    ? '<p>Nenhum produto disponível.</p>'
-    : products.map(p => `
-      <div class="bg-secondary p-4 rounded-lg">
-        <img src="${p.imageUrl || 'https://res.cloudinary.com/dmuvm1o6m/image/upload/v1680000000/placeholder.jpg'}" 
-             alt="${p.name}" class="w-full h-40 object-cover rounded mb-3">
-        <h3 class="font-semibold">${p.name}</h3>
-        <p class="text-accent font-bold">R$ ${parseFloat(p.price).toFixed(2)}</p>
-        <p class="text-xs text-gray-400">${p.description || ''}</p>
-        <span class="${p.quantity === 0 ? 'badge-out' : p.quantity <= p.alertLevel ? 'badge-low' : 'badge-in'}">
-          ${p.quantity === 0 ? 'Esgotado' : `${p.quantity} em estoque`}
-        </span>
-        ${p.quantity > 0 ? `<button class="btn-neon mt-2 w-full" onclick="addToCart('${p.id}')">Adicionar ao Carrinho</button>` : ''}
-      </div>
-    `).join('');
+// --- MÓDULO: VITRINE PÚBLICA (E-COMMERCE) ---
+// ... (sem alterações neste módulo)
+function loadPublicProducts() {
+    database.ref('estoque').on('value', snapshot => {
+        products = snapshot.val() || {};
+        const productEntries = Object.entries(products);
+        ui.shop.productList.innerHTML = productEntries.length === 0 
+            ? '<p class="col-span-full text-center">Nenhum produto disponível no momento.</p>'
+            : productEntries.map(([id, p]) => `
+                <div class="product-card">
+                    <img src="${p.imagem || 'https://placehold.co/300x200/1f2937/9ca3af?text=Produto'}" alt="${p.nome}">
+                    <h3>${p.nome}</h3>
+                    <p>${p.descricao || 'Sem descrição.'}</p>
+                    <p class="price">R$ ${(p.precoVenda || 0).toFixed(2).replace('.', ',')}</p>
+                    ${(p.quantidade || 0) > 0
+                        ? `<button class="add-to-cart-button w-full bg-cyan-600 hover:bg-cyan-700 text-white font-bold py-2 px-4 rounded" data-id="${id}">Adicionar ao Carrinho</button>`
+                        : `<p class="out-of-stock">Esgotado</p>`
+                    }
+                </div>
+            `).join('');
+    });
 }
 
 function addToCart(productId) {
-  const product = products.find(p => p.id === productId);
-  const item = cart.find(i => i.id === productId);
-  if (item) {
-    item.qty++;
-  } else {
-    cart.push({ ...product, qty: 1 });
-  }
-  alert(`${product.name} adicionado ao carrinho!`);
-  renderPublicStore();
+    if (cart[productId]) {
+        cart[productId].quantity++;
+    } else {
+        cart[productId] = { ...products[productId], quantity: 1 };
+    }
+    updateCartDisplay();
 }
 
-// === CHECKOUT ===
-window.openCheckout = function() {
-  const modal = document.createElement('div');
-  modal.classList.add('modal-overlay');
-  modal.innerHTML = `
-    <div class="bg-secondary p-6 rounded-lg shadow-lg w-full max-w-md">
-      <h3 class="text-xl font-bold mb-4">Finalizar Pedido</h3>
-      <form id="checkoutForm">
-        <div class="mb-4">
-          <label>Nome</label>
-          <input type="text" id="customerName" class="input-dark w-full" required>
-        </div>
-        <div class="mb-4">
-          <label>WhatsApp (com DDD)</label>
-          <input type="text" id="whatsapp" class="input-dark w-full" placeholder="11999999999" required>
-        </div>
-        <div class="mb-4">
-          <h4>Itens:</h4>
-          <ul class="text-sm">
-            ${cart.map(i => `<li>${i.qty}x ${i.name} - R$ ${(i.price * i.qty).toFixed(2)}</li>`).join('')}
-          </ul>
-          <p class="font-bold mt-2">Total: R$ ${cart.reduce((acc, i) => acc + i.price * i.qty, 0).toFixed(2)}</p>
-        </div>
-        <div class="flex justify-end space-x-2">
-          <button type="button" id="cancelCheckout" class="btn-neon">Cancelar</button>
-          <button type="submit" class="btn-neon">Enviar no WhatsApp</button>
-        </div>
-      </form>
-    </div>
-  `;
-  document.body.appendChild(modal);
+function removeFromCart(productId) {
+    if (cart[productId] && cart[productId].quantity > 1) {
+        cart[productId].quantity--;
+    } else {
+        delete cart[productId];
+    }
+    updateCartDisplay();
+}
 
-  document.getElementById('cancelCheckout').onclick = () => document.body.removeChild(modal);
-  document.getElementById('checkoutForm').onsubmit = (e) => {
-    e.preventDefault();
-    const name = document.getElementById('customerName').value;
-    const phone = document.getElementById('whatsapp').value;
-    const message = encodeURIComponent(
-      `*Novo Pedido - Techmess*\nCliente: ${name}\nItens:\n${cart.map(i => `${i.qty}x ${i.name}`).join('\n')}\nTotal: R$ ${cart.reduce((acc, i) => acc + i.price * i.qty, 0).toFixed(2)}`
-    );
-    window.open(`https://wa.me/${phone}?text=${message}`, '_blank');
+function updateCartDisplay() {
+    let total = 0;
+    let totalItems = 0;
+    const cartEntries = Object.entries(cart);
+
+    ui.cart.items.innerHTML = cartEntries.length === 0
+        ? '<p>O seu carrinho está vazio.</p>'
+        : cartEntries.map(([id, item]) => {
+            total += item.quantity * item.precoVenda;
+            totalItems += item.quantity;
+            return `
+                <div class="cart-item">
+                    <div class="item-info">
+                        <h4>${item.nome}</h4>
+                        <p>${item.quantity} x R$ ${item.precoVenda.toFixed(2).replace('.', ',')}</p>
+                    </div>
+                    <div class="item-actions">
+                        <button data-id="${id}" class="remove-from-cart-button bg-red-600 hover:bg-red-700 text-white text-xs px-2 py-1 rounded">Remover</button>
+                    </div>
+                </div>
+            `;
+        }).join('');
+        
+    ui.cart.total.textContent = `R$ ${total.toFixed(2).replace('.', ',')}`;
+    ui.cart.checkoutButton.disabled = cartEntries.length === 0;
+
+    if (totalItems > 0) {
+        ui.nav.cartItemCount.textContent = totalItems;
+        ui.nav.cartItemCount.classList.remove('hidden');
+    } else {
+        ui.nav.cartItemCount.classList.add('hidden');
+    }
+}
+
+
+// --- MÓDULO: CLIENTES (CRM) ---
+
+function openNewCustomerModal() {
+    ui.erp.customers.title.textContent = 'Adicionar Novo Cliente';
+    ui.erp.customers.idInput.value = '';
+    ui.erp.customers.nameInput.value = '';
+    ui.erp.customers.whatsappInput.value = '';
+    ui.erp.customers.emailInput.value = '';
+    ui.erp.customers.notesInput.value = '';
+    toggleModal(ui.erp.customers.modal, true);
+}
+
+function openEditCustomerModal(customerId) {
+    const customer = customers[customerId];
+    if (customer) {
+        ui.erp.customers.title.textContent = 'Editar Cliente';
+        ui.erp.customers.idInput.value = customerId;
+        ui.erp.customers.nameInput.value = customer.nome;
+        ui.erp.customers.whatsappInput.value = customer.whatsapp;
+        ui.erp.customers.emailInput.value = customer.email || '';
+        ui.erp.customers.notesInput.value = customer.observacoes || '';
+        toggleModal(ui.erp.customers.modal, true);
+    }
+}
+
+function saveCustomer() {
+    const id = ui.erp.customers.idInput.value;
+    const name = ui.erp.customers.nameInput.value.trim();
+    const whatsapp = ui.erp.customers.whatsappInput.value.trim();
+    const email = ui.erp.customers.emailInput.value.trim();
+    const notes = ui.erp.customers.notesInput.value.trim();
+
+    if (!name || !whatsapp) {
+        alert('Nome e WhatsApp são obrigatórios.');
+        return;
+    }
+
+    const customerData = {
+        nome: name,
+        nome_lowercase: name.toLowerCase(),
+        whatsapp: whatsapp,
+        email: email,
+        observacoes: notes,
+        dataCadastro: new Date().toISOString()
+    };
     
-    db.ref('sales').push({
-      customerId: name,
-      items: cart.map(i => ({ id: i.id, name: i.name, qty: i.qty, price: i.price })),
-      total: cart.reduce((acc, i) => acc + i.price * i.qty, 0),
-      date: new Date().toISOString().split('T')[0],
-      status: 'pending',
-      customerName: name,
-      whatsapp: phone
-    });
-
-    cart = [];
-    document.body.removeChild(modal);
-    renderPublicStore();
-  };
-};
-
-// === ERP ===
-function renderERP() {
-  app.innerHTML = `
-    <div class="flex h-full">
-      <aside class="w-64 bg-primary h-full min-h-screen p-4 hidden md:block">
-        <h1 class="text-xl font-bold accent-text mb-8">Techmess ERP</h1>
-        <nav class="space-y-2">${generateNav()}</nav>
-      </aside>
-      <div class="md:hidden bg-primary p-4 flex justify-between items-center">
-        <h1 class="text-lg font-bold accent-text">Techmess</h1>
-        <button id="menuToggle" class="text-accent">☰</button>
-      </div>
-      <div id="mobileMenu" class="fixed inset-0 bg-black bg-opacity-75 z-40 hidden">
-        <div class="bg-primary w-64 h-full p-4">
-          <button id="closeMenu" class="float-right text-accent mb-4">✕</button>
-          <nav class="space-y-4 mt-8">${generateNav()}</nav>
-        </div>
-      </div>
-      <main class="flex-1 p-6 bg-dark overflow-y-auto" id="mainContent"></main>
-    </div>
-  `;
-
-  setupNavEvents();
-  navigateTo(currentScreen);
+    const dbRef = id ? database.ref('clientes/' + id) : database.ref('clientes').push();
+    dbRef.set(customerData).then(() => {
+        alert(`Cliente ${id ? 'atualizado' : 'salvo'} com sucesso!`);
+        toggleModal(ui.erp.customers.modal, false);
+    }).catch(error => alert(`Erro ao salvar cliente: ${error.message}`));
 }
 
-function generateNav() {
-  return `
-    <a href="#" data-screen="dashboard" class="block p-2 rounded hover:text-accent transition">Dashboard</a>
-    <a href="#" data-screen="sales" class="block p-2 rounded hover:text-accent transition">Vendas</a>
-    <a href="#" data-screen="purchases" class="block p-2 rounded hover:text-accent transition">Compras</a>
-    <a href="#" data-screen="inventory" class="block p-2 rounded hover:text-accent transition">Estoque</a>
-    <a href="#" data-screen="finance" class="block p-2 rounded hover:text-accent transition">Financeiro</a>
-    <a href="#" data-screen="suppliers" class="block p-2 rounded hover:text-accent transition">Fornecedores</a>
-    <a href="#" id="logoutBtn" class="block p-2 rounded text-red-400 hover:text-red-200 transition">Sair</a>
-  `;
-}
-
-function setupNavEvents() {
-  document.querySelectorAll('[data-screen]').forEach(link => {
-    link.addEventListener('click', (e) => {
-      e.preventDefault();
-      navigateTo(e.target.getAttribute('data-screen'));
-    });
-  });
-  document.getElementById('logoutBtn').addEventListener('click', logout);
-  document.getElementById('menuToggle').addEventListener('click', () => {
-    document.getElementById('mobileMenu').classList.remove('hidden');
-  });
-  document.getElementById('closeMenu').addEventListener('click', () => {
-    document.getElementById('mobileMenu').classList.add('hidden');
-  });
-}
-
-async function navigateTo(screen) {
-  currentScreen = screen;
-  const main = document.getElementById('mainContent');
-  main.innerHTML = '<div class="flex items-center justify-center h-64"><div class="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-accent"></div></div>';
-  
-  // Recarregar dados se necessário
-  if (['dashboard', 'inventory', 'sales'].includes(screen)) {
-    await loadDataSafelyForNav();
-  }
-
-  setTimeout(() => {
-    switch (screen) {
-      case 'dashboard': renderDashboard(); break;
-      case 'inventory': renderInventory(); break;
-      case 'sales': renderSales(); break;
-      case 'purchases': renderPurchases(); break;
-      case 'finance': renderFinance(); break;
-      case 'suppliers': renderSuppliers(); break;
-      default: renderDashboard();
+function deleteCustomer(customerId) {
+    if (confirm('Tem a certeza de que deseja excluir este cliente? Esta ação não pode ser desfeita.')) {
+        database.ref('clientes/' + customerId).remove()
+            .then(() => alert('Cliente excluído com sucesso!'))
+            .catch(error => alert('Erro ao excluir cliente: ' + error.message));
     }
-  }, 200);
 }
 
-async function loadDataSafelyForNav() {
-  const paths = ['products', 'sales'];
-  for (const path of paths) {
-    try {
-      const snapshot = await db.ref(path).once('value');
-      window[path] = Object.values(snapshot.val() || {});
-    } catch (err) {
-      console.warn(`Erro ao carregar ${path}:`, err.message);
-    }
-  }
-}
+function loadCustomerManagement() {
+    database.ref('clientes').on('value', snapshot => {
+        customers = snapshot.val() || {};
+        const tableBody = Object.entries(customers).map(([id, c]) => `
+            <tr>
+                <td>${c.nome}</td>
+                <td>${c.whatsapp}</td>
+                <td>${c.email || 'N/A'}</td>
+                <td>
+                    <button class="edit-customer-button bg-blue-600 hover:bg-blue-700 text-white text-xs px-2 py-1 rounded" data-id="${id}">Editar</button>
+                    <button class="delete-customer-button bg-red-600 hover:bg-red-700 text-white text-xs px-2 py-1 rounded ml-2" data-id="${id}">Excluir</button>
+                </td>
+            </tr>
+        `).join('');
 
-function renderDashboard() {
-  const today = new Date().toISOString().split('T')[0];
-  const salesToday = sales.filter(s => s.date === today && s.status === 'confirmed');
-  const revenue = salesToday.reduce((acc, s) => acc + s.total, 0);
-  const avgTicket = salesToday.length ? (revenue / salesToday.length).toFixed(2) : '0.00';
-  const lowStock = products.filter(p => p.quantity <= p.alertLevel);
-
-  document.getElementById('mainContent').innerHTML = `
-    <h2 class="text-2xl font-bold mb-6">Dashboard</h2>
-    <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-      <div class="kpi-card"><h3>Faturamento Hoje</h3><p>R$ ${revenue.toFixed(2)}</p></div>
-      <div class="kpi-card"><h3>Vendas Hoje</h3><p>${salesToday.length}</p></div>
-      <div class="kpi-card"><h3>Ticket Médio</h3><p>R$ ${avgTicket}</p></div>
-    </div>
-    ${lowStock.length > 0 ? `
-    <div class="bg-red-900 bg-opacity-50 p-4 rounded border border-red-600">
-      <h3 class="font-semibold text-red-300">⚠️ Estoque Baixo</h3>
-      <ul>${lowStock.map(p => `<li>${p.name} (${p.quantity})</li>`).join('')}</ul>
-    </div>` : '<p>Nenhum alerta de estoque.</p>'}
-  `;
-}
-
-function renderInventory() {
-  const main = document.getElementById('mainContent');
-  main.innerHTML = `
-    <div class="flex justify-between items-center mb-6">
-      <h2 class="text-2xl font-bold">Estoque</h2>
-      <button id="btnAddProduct" class="btn-neon">+ Novo Produto</button>
-    </div>
-    <div class="table-container">
-      <table><thead><tr>
-        <th>Imagem</th>
-        <th>Nome</th>
-        <th>Preço</th>
-        <th>Quantidade</th>
-        <th>Status</th>
-        <th>Ações</th>
-      </tr></thead>
-      <tbody id="productList"></tbody>
-      </table>
-    </div>
-  `;
-  renderProductList();
-  document.getElementById('btnAddProduct').addEventListener('click', openProductModal);
-}
-
-function renderProductList() {
-  const tbody = document.getElementById('productList');
-  tbody.innerHTML = products.map(p => {
-    const status = p.quantity === 0 ? 'Esgotado' : p.quantity <= p.alertLevel ? 'Baixo' : 'Normal';
-    const badge = p.quantity === 0 ? 'badge-out' : p.quantity <= p.alertLevel ? 'badge-low' : 'badge-in';
-    return `
-      <tr>
-        <td><img src="${p.imageUrl || 'https://res.cloudinary.com/dmuvm1o6m/image/upload/v1680000000/placeholder.jpg'}" class="w-10 h-10 object-cover rounded" /></td>
-        <td>${p.name}</td>
-        <td>R$ ${p.price}</td>
-        <td>${p.quantity}</td>
-        <td><span class="${badge}">${status}</span></td>
-        <td>
-          <button class="text-accent text-sm mr-2" onclick="openProductModal('${p.id}')">Editar</button>
-          <button class="text-red-400 text-sm" onclick="deleteProduct('${p.id}')">Excluir</button>
-          <button class="text-blue-400 text-sm ml-2" onclick="viewKardex('${p.id}')">Kardex</button>
-        </td>
-      </tr>
-    `;
-  }).join('');
-}
-
-function openProductModal(productId = null) {
-  const product = productId ? products.find(p => p.id === productId) : null;
-  const modal = document.createElement('div');
-  modal.classList.add('modal-overlay');
-  modal.innerHTML = `
-    <div class="bg-secondary p-6 rounded-lg shadow-lg w-full max-w-lg">
-      <h3 class="text-xl font-bold mb-4">${product ? 'Editar' : 'Novo'} Produto</h3>
-      <form id="productForm">
-        <input type="hidden" id="productId" value="${product?.id || ''}">
-        <div class="mb-4"><label>Nome</label><input type="text" id="name" class="input-dark w-full" value="${product?.name || ''}" required></div>
-        <div class="mb-4"><label>Preço</label><input type="number" step="0.01" id="price" class="input-dark w-full" value="${product?.price || ''}" required></div>
-        <div class="mb-4"><label>Quantidade</label><input type="number" id="quantity" class="input-dark w-full" value="${product?.quantity || 0}" required></div>
-        <div class="mb-4"><label>Alerta</label><input type="number" id="alertLevel" class="input-dark w-full" value="${product?.alertLevel || 5}" required></div>
-        <div class="mb-4"><label>Descrição</label><textarea id="description" class="input-dark w-full" rows="2">${product?.description || ''}</textarea></div>
-        <div class="mb-4"><label>Imagem</label><input type="text" id="imageUrl" class="input-dark w-full" value="${product?.imageUrl || ''}"><button type="button" id="uploadImage" class="btn-neon mt-1">Enviar Imagem</button></div>
-        <div class="flex justify-end space-x-2">
-          <button type="button" id="cancelProduct" class="btn-neon">Cancelar</button>
-          <button type="submit" class="btn-neon">Salvar</button>
-        </div>
-      </form>
-    </div>
-  `;
-  document.body.appendChild(modal);
-
-  document.getElementById('cancelProduct').onclick = () => document.body.removeChild(modal);
-  document.getElementById('uploadImage').onclick = () => {
-    const widget = cloudinary.createUploadWidget({
-      cloudName: cloudName,
-      uploadPreset: uploadPreset
-    }, (error, result) => {
-      if (!error && result && result.event === "success") {
-        document.getElementById('imageUrl').value = result.info.secure_url;
-      }
+        ui.erp.customers.list.innerHTML = `
+            <table class="w-full text-sm">
+                <thead><tr><th>Nome</th><th>WhatsApp</th><th>E-mail</th><th>Ações</th></tr></thead>
+                <tbody>${tableBody || '<tr><td colspan="4" class="text-center">Nenhum cliente cadastrado.</td></tr>'}</tbody>
+            </table>
+        `;
     });
-    widget.open();
-  };
+}
 
-  document.getElementById('productForm').onsubmit = async (e) => {
-    e.preventDefault();
-    const data = {
-      name: document.getElementById('name').value,
-      price: parseFloat(document.getElementById('price').value),
-      quantity: parseInt(document.getElementById('quantity').value),
-      alertLevel: parseInt(document.getElementById('alertLevel').value),
-      description: document.getElementById('description').value,
-      imageUrl: document.getElementById('imageUrl').value,
-      id: document.getElementById('productId').value
+// Atualização na função de checkout para integrar com o CRM
+async function submitCheckout() {
+    const name = ui.checkout.nameInput.value.trim();
+    const whatsapp = ui.checkout.whatsappInput.value.trim();
+
+    if (!name || !whatsapp || Object.keys(cart).length === 0) {
+        alert('Por favor, preencha todos os campos e adicione itens ao carrinho.');
+        return;
+    }
+
+    // Procura por cliente existente ou cria um novo ID
+    let customerId = null;
+    const customerQuery = await database.ref('clientes').orderByChild('whatsapp').equalTo(whatsapp).once('value');
+    if (customerQuery.exists()) {
+        customerId = Object.keys(customerQuery.val())[0];
+    } else {
+        const newCustomerData = {
+            nome: name,
+            nome_lowercase: name.toLowerCase(),
+            whatsapp: whatsapp,
+            dataCadastro: new Date().toISOString()
+        };
+        const newCustomerRef = await database.ref('clientes').push(newCustomerData);
+        customerId = newCustomerRef.key;
+    }
+
+    const order = {
+        clienteId: customerId, // Salva o ID do cliente no pedido
+        cliente: name,
+        whatsapp: whatsapp,
+        itens: cart,
+        total: Object.values(cart).reduce((sum, item) => sum + item.quantity * item.precoVenda, 0),
+        status: 'pendente',
+        data: new Date().toISOString()
     };
 
-    const ref = data.id ? db.ref(`products/${data.id}`) : db.ref('products').push();
-    if (!data.id) data.id = ref.key;
-    await ref.set(data);
-    await loadDataSafelyForNav();
-    renderProductList();
-    document.body.removeChild(modal);
-  };
+    database.ref('pedidos').push(order).then(() => {
+        alert('Pedido realizado com sucesso!');
+        cart = {};
+        updateCartDisplay();
+        toggleModal(ui.checkout.modal, false);
+        ui.checkout.nameInput.value = '';
+        ui.checkout.whatsappInput.value = '';
+    }).catch(error => {
+        console.error("Erro no checkout:", error);
+        alert('Erro ao realizar pedido: ' + error.message);
+    });
 }
 
-async function deleteProduct(id) {
-  if (confirm('Excluir?')) {
-    await db.ref(`products/${id}`).remove();
-    await loadDataSafelyForNav();
-    renderProductList();
-  }
+
+// --- MÓDULO: ESTOQUE (ERP) ---
+// ... (sem alterações)
+async function saveProduct() {
+    const id = ui.erp.stock.idInput.value;
+    const name = ui.erp.stock.nameInput.value;
+    const price = parseFloat(ui.erp.stock.priceInput.value);
+    const quantity = parseInt(ui.erp.stock.quantityInput.value);
+    const description = ui.erp.stock.descriptionInput.value;
+    const alertLevel = parseInt(ui.erp.stock.alertLevelInput.value);
+    const imageFile = ui.erp.stock.imageUploadInput.files[0];
+
+    if (!name || isNaN(price) || isNaN(quantity)) {
+        alert('Por favor, preencha nome, preço e quantidade corretamente.');
+        return;
+    }
+
+    let imageUrl = (id && products[id] && products[id].imagem) || '';
+    if (imageFile) {
+        try {
+            const formData = new FormData();
+            formData.append('file', imageFile);
+            formData.append('upload_preset', CLOUDINARY_UPLOAD_PRESET);
+            const response = await fetch(CLOUDINARY_API_URL, { method: 'POST', body: formData });
+            const data = await response.json();
+            if (data.secure_url) {
+                imageUrl = data.secure_url;
+            } else {
+                throw new Error(data.error.message || 'Erro desconhecido no upload.');
+            }
+        } catch (error) {
+            console.error("Cloudinary upload error:", error);
+            alert('Erro ao fazer upload da imagem. Tente novamente.');
+            return;
+        }
+    }
+
+    const productData = {
+        nome: name,
+        nome_lowercase: name.toLowerCase(),
+        precoVenda: price,
+        quantidade: quantity,
+        descricao: description,
+        nivelAlertaEstoque: alertLevel || 0,
+        imagem: imageUrl
+    };
+
+    const dbRef = id ? database.ref('estoque/' + id) : database.ref('estoque').push();
+    dbRef.set(productData).then(() => {
+        alert(`Produto ${id ? 'atualizado' : 'adicionado'} com sucesso!`);
+        toggleModal(ui.erp.stock.modal, false);
+    }).catch(error => alert(`Erro ao salvar produto: ${error.message}`));
 }
 
-function viewKardex(productId) {
-  const product = products.find(p => p.id === productId);
-  const movements = [
-    ...sales.filter(s => s.items.some(i => i.id === productId)).map(s => ({ type: 'Saída', qty: s.items.find(i => i.id === productId).qty, date: s.date, ref: `Venda #${s.id}` })),
-    ...purchases.filter(p => p.items.some(i => i.id === productId)).map(p => ({ type: 'Entrada', qty: p.items.find(i => i.id === productId).qty, date: p.date, ref: `Compra #${p.id}` }))
-  ].sort((a, b) => new Date(b.date) - new Date(a.date));
-
-  const modal = document.createElement('div');
-  modal.classList.add('modal-overlay');
-  modal.innerHTML = `
-    <div class="bg-secondary p-6 rounded-lg shadow-lg w-full max-w-lg">
-      <h3 class="text-xl font-bold mb-4">Kardex - ${product.name}</h3>
-      <div class="table-container"><table><tr><th>Tipo</th><th>Quantidade</th><th>Data</th><th>Referência</th></tr>
-      ${movements.map(m => `<tr><td>${m.type}</td><td>${m.qty}</td><td>${m.date}</td><td>${m.ref}</td></tr>`).join('')}
-      </table></div>
-      <button onclick="this.parentElement.parentElement.remove()" class="btn-neon mt-4">Fechar</button>
-    </div>
-  `;
-  document.body.appendChild(modal);
+function loadStockManagement() {
+    database.ref('estoque').on('value', snapshot => {
+        products = snapshot.val() || {};
+        const tableBody = Object.entries(products).map(([id, p]) => `
+            <tr>
+                <td><img src="${p.imagem || 'https://placehold.co/50x50/374151/9ca3af?text=Img'}" alt="${p.nome}" class="w-12 h-12 object-cover rounded"></td>
+                <td>${p.nome}</td>
+                <td>R$ ${(p.precoVenda || 0).toFixed(2).replace('.', ',')}</td>
+                <td>${p.quantidade || 0}</td>
+                <td>${p.nivelAlertaEstoque || 0}</td>
+                <td>
+                    <button class="edit-product-button bg-blue-600 hover:bg-blue-700 text-white text-xs px-2 py-1 rounded" data-id="${id}">Editar</button>
+                    <button class="delete-product-button bg-red-600 hover:bg-red-700 text-white text-xs px-2 py-1 rounded ml-2" data-id="${id}">Excluir</button>
+                </td>
+            </tr>
+        `).join('');
+        
+        ui.erp.stock.list.innerHTML = `
+            <table class="w-full text-sm">
+                <thead><tr><th>Imagem</th><th>Nome</th><th>Preço Venda</th><th>Qtd.</th><th>Alerta</th><th>Ações</th></tr></thead>
+                <tbody>${tableBody}</tbody>
+            </table>
+        `;
+        updateLowStockAlerts();
+    });
 }
 
-function logout() {
-  auth.signOut().then(() => {
-    currentUser = null;
-    currentScreen = 'home';
-    renderApp();
-  });
+function openEditProductModal(productId) {
+    const p = products[productId];
+    if (p) {
+        ui.erp.stock.title.textContent = 'Editar Produto';
+        ui.erp.stock.idInput.value = productId;
+        ui.erp.stock.nameInput.value = p.nome;
+        ui.erp.stock.priceInput.value = p.precoVenda;
+        ui.erp.stock.quantityInput.value = p.quantidade;
+        ui.erp.stock.descriptionInput.value = p.descricao;
+        ui.erp.stock.alertLevelInput.value = p.nivelAlertaEstoque;
+        ui.erp.stock.imageUploadInput.value = '';
+        toggleModal(ui.erp.stock.modal, true);
+    }
 }
 
-// ================================
-// 🚀 INICIALIZAÇÃO COM DETETIVE
-// ================================
+function openNewProductModal() {
+    ui.erp.stock.title.textContent = 'Adicionar Produto';
+    ui.erp.stock.idInput.value = '';
+    ui.erp.stock.nameInput.value = '';
+    ui.erp.stock.priceInput.value = '';
+    ui.erp.stock.quantityInput.value = '';
+    ui.erp.stock.descriptionInput.value = '';
+    ui.erp.stock.alertLevelInput.value = '';
+    ui.erp.stock.imageUploadInput.value = '';
+    toggleModal(ui.erp.stock.modal, true);
+}
 
-auth.onAuthStateChanged(async (user) => {
-  currentUser = user;
+function deleteProduct(productId) {
+    if (confirm('Tem a certeza de que deseja excluir este produto?')) {
+        database.ref('estoque/' + productId).remove()
+            .then(() => alert('Produto excluído com sucesso!'))
+            .catch(error => alert('Erro ao excluir produto: ' + error.message));
+    }
+}
 
-  const loading = document.getElementById('loading');
-  if (loading) loading.remove();
 
-  const detective = new TechmessDetective();
-  await detective.investigate();
+// --- MÓDULO: VENDAS (ERP) ---
+// ... (sem alterações aqui, além das que já fizemos)
+function loadSales() {
+    database.ref('pedidos').orderByChild('status').equalTo('pendente').on('value', snapshot => {
+        const orders = snapshot.val() || {};
+        const tableBody = Object.entries(orders).map(([id, order]) => {
+            const itemsList = Object.values(order.itens).map(item => `${item.nome} (${item.quantity})`).join(', ');
+            return `
+                <tr>
+                    <td>${new Date(order.data).toLocaleDateString()}</td>
+                    <td>${order.cliente}</td>
+                    <td>${order.whatsapp}</td>
+                    <td class="text-xs">${itemsList}</td>
+                    <td>R$ ${order.total.toFixed(2)}</td>
+                    <td>
+                        <button class="confirm-sale-button bg-green-600 text-white text-xs px-2 py-1 rounded" data-id="${id}">Confirmar</button>
+                        <button class="cancel-order-button bg-red-600 text-white text-xs px-2 py-1 rounded ml-2" data-id="${id}">Cancelar</button>
+                    </td>
+                </tr>`;
+        }).join('');
+        
+        ui.erp.sales.pendingOrders.innerHTML = Object.keys(orders).length > 0 ? `
+            <table class="w-full text-sm">
+                <thead><tr><th>Data</th><th>Cliente</th><th>WhatsApp</th><th>Itens</th><th>Total</th><th>Ações</th></tr></thead>
+                <tbody>${tableBody}</tbody>
+            </table>` : '<p>Nenhum pedido pendente para confirmar.</p>';
+    });
+}
+
+function loadSalesHistory() {
+    database.ref('vendas').limitToLast(25).on('value', snapshot => {
+        const sales = snapshot.val() || {};
+        const reversedSales = Object.entries(sales).reverse();
+
+        if (reversedSales.length === 0) {
+            ui.erp.sales.historyList.innerHTML = '<p>Nenhuma venda foi confirmada ainda.</p>';
+            return;
+        }
+
+        const tableBody = reversedSales.map(([id, sale]) => {
+            const itemsList = Object.values(sale.itens).map(item => `${item.nome} (${item.quantity})`).join(', ');
+            return `
+                <tr>
+                    <td>${new Date(sale.data).toLocaleDateString()}</td>
+                    <td>${sale.cliente}</td>
+                    <td>${sale.whatsapp}</td>
+                    <td class="text-xs">${itemsList}</td>
+                    <td>R$ ${sale.total.toFixed(2)}</td>
+                </tr>`;
+        }).join('');
+        
+        ui.erp.sales.historyList.innerHTML = `
+            <table class="w-full text-sm">
+                <thead><tr><th>Data</th><th>Cliente</th><th>WhatsApp</th><th>Itens</th><th>Total</th></tr></thead>
+                <tbody>${tableBody}</tbody>
+            </table>`;
+    });
+}
+
+async function confirmSale(orderId) {
+    const orderRef = database.ref('pedidos/' + orderId);
+    const orderSnapshot = await orderRef.once('value');
+    const order = orderSnapshot.val();
+
+    if (!order || !confirm('Confirmar esta venda? O estoque será atualizado.')) return;
+
+    const updates = {};
+    let hasEnoughStock = true;
+    const stockChecks = [];
+
+    for (const [itemId, item] of Object.entries(order.itens)) {
+        const check = database.ref('estoque/' + itemId).once('value').then(snapshot => {
+            const product = snapshot.val();
+            if (!product || product.quantidade < item.quantity) {
+                hasEnoughStock = false;
+                alert(`Estoque insuficiente para ${item.nome}. Venda não confirmada.`);
+            } else {
+                updates[`/estoque/${itemId}/quantidade`] = firebase.database.ServerValue.increment(-item.quantity);
+            }
+        });
+        stockChecks.push(check);
+    }
+    
+    await Promise.all(stockChecks);
+
+    if (!hasEnoughStock) {
+        return;
+    }
+
+    await database.ref().update(updates);
+    const newSaleRef = await database.ref('vendas').push(order);
+    const newSaleId = newSaleRef.key;
+    await database.ref('fluxoDeCaixa').push({
+        tipo: 'Receber',
+        descricao: `Venda #${newSaleId.slice(-5)} - ${order.cliente}`,
+        valor: order.total,
+        data: order.data,
+        status: 'Pendente'
+    });
+    await orderRef.remove();
+    alert('Venda confirmada e estoque atualizado!');
+}
+
+function cancelOrder(orderId) {
+    if (confirm('Tem a certeza de que deseja cancelar este pedido?')) {
+        database.ref('pedidos/' + orderId).remove().then(() => alert('Pedido cancelado!'));
+    }
+}
+
+
+// --- Restante do código (Fornecedores, Compras, Financeiro, etc.) permanece o mesmo ---
+function saveSupplier() {
+    const id = ui.erp.suppliers.idInput.value;
+    const name = ui.erp.suppliers.nameInput.value.trim();
+    const contact = ui.erp.suppliers.contactInput.value.trim();
+    if (!name) {
+        alert("O nome do fornecedor é obrigatório.");
+        return;
+    }
+    const supplierData = { nome: name, contato: contact };
+    const ref = id ? database.ref('fornecedores/' + id) : database.ref('fornecedores').push();
+    ref.set(supplierData).then(() => {
+        alert(`Fornecedor ${id ? 'atualizado' : 'salvo'} com sucesso!`);
+        toggleModal(ui.erp.suppliers.modal, false);
+    }).catch(e => alert("Erro: " + e.message));
+}
+
+function loadSupplierManagement() {
+    database.ref('fornecedores').on('value', snapshot => {
+        suppliers = snapshot.val() || {};
+        const tableBody = Object.entries(suppliers).map(([id, s]) => `
+            <tr>
+                <td>${s.nome}</td>
+                <td>${s.contato}</td>
+                <td>
+                    <button class="edit-supplier-button bg-blue-600 text-white text-xs px-2 py-1 rounded" data-id="${id}">Editar</button>
+                    <button class="delete-supplier-button bg-red-600 text-white text-xs px-2 py-1 rounded ml-2" data-id="${id}">Excluir</button>
+                </td>
+            </tr>
+        `).join('');
+        ui.erp.suppliers.list.innerHTML = `
+            <table class="w-full text-sm">
+                <thead><tr><th>Nome</th><th>Contato</th><th>Ações</th></tr></thead>
+                <tbody>${tableBody || '<tr><td colspan="3" class="text-center">Nenhum fornecedor registado.</td></tr>'}</tbody>
+            </table>`;
+    });
+}
+
+function openEditSupplierModal(id) {
+    const s = suppliers[id];
+    if (s) {
+        ui.erp.suppliers.title.textContent = "Editar Fornecedor";
+        ui.erp.suppliers.idInput.value = id;
+        ui.erp.suppliers.nameInput.value = s.nome;
+        ui.erp.suppliers.contactInput.value = s.contato;
+        toggleModal(ui.erp.suppliers.modal, true);
+    }
+}
+
+function openNewSupplierModal() {
+    ui.erp.suppliers.title.textContent = "Adicionar Fornecedor";
+    ui.erp.suppliers.idInput.value = '';
+    ui.erp.suppliers.nameInput.value = '';
+    ui.erp.suppliers.contactInput.value = '';
+    toggleModal(ui.erp.suppliers.modal, true);
+}
+
+function deleteSupplier(id) {
+    if (confirm("Tem a certeza de que deseja excluir este fornecedor?")) {
+        database.ref('fornecedores/' + id).remove()
+        .then(() => alert("Fornecedor excluído."))
+        .catch(e => alert("Erro: " + e.message));
+    }
+}
+
+
+function openNewPurchaseModal() {
+    const supplierOptions = Object.entries(suppliers).map(([id, s]) => `<option value="${id}">${s.nome}</option>`).join('');
+    const productOptions = Object.entries(products).map(([id, p]) => `<option value="${id}">${p.nome}</option>`).join('');
+    if(!supplierOptions || !productOptions) {
+        alert("É necessário ter pelo menos um fornecedor e um produto registado para registar uma compra.");
+        return;
+    }
+    ui.erp.purchases.supplierSelect.innerHTML = supplierOptions;
+    ui.erp.purchases.productSelect.innerHTML = productOptions;
+    
+    ui.erp.purchases.invoiceInput.value = '';
+    ui.erp.purchases.paymentMethodSelect.value = 'Boleto';
+    ui.erp.purchases.dateInput.value = new Date().toISOString().split('T')[0];
+    
+    currentPurchaseItems = {};
+    updatePurchaseItemsList();
+    toggleModal(ui.erp.purchases.modal, true);
+}
+
+function addItemToPurchase() {
+    const productId = ui.erp.purchases.productSelect.value;
+    const quantity = parseInt(ui.erp.purchases.quantityInput.value);
+    const unitPrice = parseFloat(ui.erp.purchases.priceInput.value);
+
+    if (!productId || isNaN(quantity) || quantity <= 0 || isNaN(unitPrice) || unitPrice < 0) {
+        alert("Dados do item inválidos.");
+        return;
+    }
+    currentPurchaseItems[productId] = { nome: products[productId].nome, quantity, unitPrice };
+    updatePurchaseItemsList();
+}
+
+function updatePurchaseItemsList() {
+    let total = 0;
+    ui.erp.purchases.itemsList.innerHTML = Object.entries(currentPurchaseItems).map(([id, item]) => {
+        total += item.quantity * item.unitPrice;
+        return `<div class="flex justify-between items-center p-2 bg-gray-700 rounded mb-1">
+                    <span>${item.quantity}x ${item.nome} @ R$ ${item.unitPrice.toFixed(2)}</span>
+                    <button class="text-red-400 hover:text-red-600 remove-purchase-item-button" data-id="${id}">&times;</button>
+                </div>`;
+    }).join('');
+    ui.erp.purchases.total.textContent = `R$ ${total.toFixed(2)}`;
+}
+
+function removeItemFromPurchase(productId) {
+    delete currentPurchaseItems[productId];
+    updatePurchaseItemsList();
+}
+
+function savePurchase() {
+    const supplierId = ui.erp.purchases.supplierSelect.value;
+    const invoiceNumber = ui.erp.purchases.invoiceInput.value.trim();
+    const purchaseDate = ui.erp.purchases.dateInput.value;
+    const paymentMethod = ui.erp.purchases.paymentMethodSelect.value;
+
+    if (!supplierId || !invoiceNumber || !purchaseDate || Object.keys(currentPurchaseItems).length === 0) {
+        alert("Preencha todos os campos da compra (fornecedor, nº da nota, data) e adicione itens.");
+        return;
+    }
+
+    const total = Object.values(currentPurchaseItems).reduce((sum, item) => sum + item.quantity * item.unitPrice, 0);
+    const purchaseData = {
+        fornecedorId: supplierId,
+        fornecedorNome: suppliers[supplierId].nome,
+        itens: currentPurchaseItems,
+        total: total,
+        status: 'Aguardando Recebimento',
+        dataRegistro: new Date().toISOString(),
+        numeroNota: invoiceNumber,
+        dataCompra: purchaseDate,
+        formaPagamento: paymentMethod
+    };
+    
+    database.ref('compras').push(purchaseData).then(() => {
+        alert("Compra registada com sucesso!");
+        toggleModal(ui.erp.purchases.modal, false);
+    }).catch(e => alert("Erro: " + e.message));
+}
+
+function loadPurchases() {
+    database.ref('compras').on('value', snapshot => {
+        const purchases = snapshot.val() || {};
+        const tableBody = Object.entries(purchases).map(([id, p]) => `
+            <tr class="align-middle">
+                <td>${new Date(p.dataCompra).toLocaleDateString('pt-BR', {timeZone: 'UTC'})}</td>
+                <td>${p.numeroNota}</td>
+                <td>${p.fornecedorNome}</td>
+                <td>R$ ${p.total.toFixed(2)}</td>
+                <td>${p.formaPagamento}</td>
+                <td>${p.status}</td>
+                <td class="flex items-center">
+                    ${p.status === 'Aguardando Recebimento' ? `<button class="confirm-receipt-button bg-green-600 text-white text-xs px-2 py-1 rounded" data-id="${id}">Receber</button>` : ''}
+                    <button class="delete-purchase-button bg-red-600 hover:bg-red-700 text-white text-xs px-2 py-1 rounded ml-2" data-id="${id}">Excluir</button>
+                </td>
+            </tr>`).join('');
+        ui.erp.purchases.list.innerHTML = `
+            <table class="w-full text-sm">
+                <thead><tr><th>Data</th><th>Nº Nota</th><th>Fornecedor</th><th>Total</th><th>Pagamento</th><th>Status</th><th>Ações</th></tr></thead>
+                <tbody>${tableBody || '<tr><td colspan="7" class="text-center">Nenhuma compra registada.</td></tr>'}</tbody>
+            </table>`;
+    });
+}
+
+function deletePurchase(purchaseId) {
+    const purchaseRef = database.ref('compras/' + purchaseId);
+    purchaseRef.once('value', snapshot => {
+        const purchase = snapshot.val();
+        if (!purchase) return;
+
+        if (purchase.status === 'Recebido') {
+            alert('Não é possível excluir uma compra que já foi recebida e teve o estoque atualizado.');
+            return;
+        }
+
+        if (confirm(`Tem a certeza de que deseja excluir a compra da NF #${purchase.numeroNota}? Esta ação não pode ser desfeita.`)) {
+            purchaseRef.remove()
+                .then(() => alert('Nota de compra excluída com sucesso!'))
+                .catch(error => alert('Erro ao excluir nota: ' + error.message));
+        }
+    });
+}
+
+async function confirmPurchaseReceipt(purchaseId) {
+    const purchaseRef = database.ref('compras/' + purchaseId);
+    const purchaseSnapshot = await purchaseRef.once('value');
+    const purchase = purchaseSnapshot.val();
+    if (purchase && confirm('Confirmar o recebimento desta compra? O estoque será atualizado.')) {
+        const updates = {};
+        for (const [itemId, item] of Object.entries(purchase.itens)) {
+            updates[`/estoque/${itemId}/quantidade`] = firebase.database.ServerValue.increment(item.quantity);
+        }
+        await database.ref().update(updates);
+
+        await database.ref('fluxoDeCaixa').push({
+            tipo: 'Pagar',
+            descricao: `Compra NF #${purchase.numeroNota} - ${purchase.fornecedorNome}`,
+            valor: purchase.total,
+            data: purchase.dataCompra,
+            status: 'Pendente'
+        });
+        
+        await purchaseRef.update({ status: 'Recebido' });
+        alert('Recebimento confirmado e estoque atualizado!');
+    }
+}
+
+
+function loadFinance() {
+    database.ref('fluxoDeCaixa').on('value', (snapshot) => {
+        const transactions = snapshot.val() || {};
+        let balance = 0;
+        const tableBody = Object.entries(transactions).map(([id, t]) => {
+            const isSettled = t.status === 'Recebido' || t.status === 'Paga';
+            if (t.status === 'Recebido') balance += t.valor;
+            if (t.status === 'Paga') balance -= t.valor;
+            const isReceber = t.tipo === 'Receber';
+            const valorClass = isReceber ? 'text-green-400' : 'text-red-400';
+            const valorSignal = isReceber ? '+' : '-';
+            return `
+            <tr>
+                <td>${new Date(t.data).toLocaleDateString('pt-BR', {timeZone: 'UTC'})}</td>
+                <td>${t.tipo}</td>
+                <td>${t.descricao}</td>
+                <td class="${valorClass}">${valorSignal} R$ ${t.valor.toFixed(2)}</td>
+                <td>${t.status}</td>
+                <td>${!isSettled ? `<button class="confirm-finance-button bg-green-600 text-white text-xs px-2 py-1 rounded" data-id="${id}" data-type="${t.tipo}">Confirmar</button>` : 'Liquidado'}</td>
+            </tr>`;
+        }).join('');
+
+        ui.erp.finance.transactions.innerHTML = `
+            <table class="w-full text-sm">
+                <thead><tr><th>Data</th><th>Tipo</th><th>Descrição</th><th>Valor</th><th>Status</th><th>Ações</th></tr></thead>
+                <tbody>${tableBody || '<tr><td colspan="6" class="text-center">Nenhuma transação.</td></tr>'}</tbody>
+            </table>`;
+        ui.erp.finance.cashBalance.textContent = `R$ ${balance.toFixed(2)}`;
+        ui.erp.finance.cashBalance.classList.toggle('text-red-400', balance < 0);
+        ui.erp.finance.cashBalance.classList.toggle('text-green-400', balance >= 0);
+    });
+}
+
+function confirmFinanceTransaction(id, type) {
+    const newStatus = type === 'Receber' ? 'Recebido' : 'Paga';
+    if (confirm(`Confirmar esta transação como "${newStatus}"?`)) {
+        database.ref('fluxoDeCaixa/' + id).update({ status: newStatus })
+        .then(() => alert('Transação atualizada!'));
+    }
+}
+
+function generateSalesReport() {
+    const startDate = ui.erp.finance.reportStartDate.value;
+    const endDate = ui.erp.finance.reportEndDate.value;
+    if (!startDate || !endDate) {
+        alert("Por favor, selecione data de início e fim.");
+        return;
+    }
+    
+    const start = new Date(startDate).setHours(0,0,0,0);
+    const end = new Date(endDate).setHours(23,59,59,999);
+
+    database.ref('vendas').orderByChild('data').startAt(new Date(start).toISOString()).endAt(new Date(end).toISOString()).once('value', snapshot => {
+        const sales = snapshot.val() || {};
+        salesReportData = Object.values(sales);
+
+        if (salesReportData.length === 0) {
+            ui.erp.finance.reportResults.innerHTML = "<p>Nenhuma venda encontrada para o período.</p>";
+            ui.erp.finance.exportCsvBtn.classList.add('hidden');
+            return;
+        }
+
+        const tableBody = salesReportData.map(sale => {
+            const items = Object.values(sale.itens).map(i => `${i.quantity}x ${i.nome}`).join('<br>');
+            return `<tr><td>${new Date(sale.data).toLocaleString('pt-BR')}</td><td>${sale.cliente}</td><td>${items}</td><td>R$ ${sale.total.toFixed(2)}</td></tr>`;
+        }).join('');
+
+        ui.erp.finance.reportResults.innerHTML = `
+            <table class="w-full text-sm">
+                <thead><tr><th>Data</th><th>Cliente</th><th>Itens</th><th>Total</th></tr></thead>
+                <tbody>${tableBody}</tbody>
+            </table>`;
+        ui.erp.finance.exportCsvBtn.classList.remove('hidden');
+    });
+}
+
+function exportToCSV() {
+    if (salesReportData.length === 0) return;
+    let csvContent = "data:text/csv;charset=utf-8,";
+    csvContent += "Data,Cliente,Produto,Quantidade,Preco Unitario,Total Item\r\n";
+    salesReportData.forEach(sale => {
+        const saleDate = new Date(sale.data).toLocaleString('pt-BR');
+        Object.values(sale.itens).forEach(item => {
+            csvContent += [
+                saleDate, `"${sale.cliente}"`, `"${item.nome}"`,
+                item.quantity, item.precoVenda.toFixed(2), (item.quantity * item.precoVenda).toFixed(2)
+            ].join(",") + "\r\n";
+        });
+    });
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement("a");
+    link.setAttribute("href", encodedUri);
+    link.setAttribute("download", `relatorio_vendas_${new Date().toISOString().split('T')[0]}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+}
+
+
+function updateLowStockAlerts() {
+    if (!ui.erp.dashboard.lowStockAlerts) return;
+    const lowStockProducts = Object.values(products).filter(p => p.quantidade <= p.nivelAlertaEstoque);
+    if (lowStockProducts.length === 0) {
+        ui.erp.dashboard.lowStockAlerts.innerHTML = '<li>Nenhum alerta de estoque baixo.</li>';
+    } else {
+        ui.erp.dashboard.lowStockAlerts.innerHTML = lowStockProducts.map(p => 
+            `<li class="text-red-400">${p.nome}: ${p.quantidade} em estoque (Alerta: ${p.nivelAlertaEstoque})</li>`
+        ).join('');
+    }
+}
+
+function calculateDailySalesAndMonthlyRevenue() {
+    database.ref('vendas').on('value', (snapshot) => {
+        const sales = snapshot.val() || {};
+        const today = new Date();
+        const startOfMonth = new Date(today.getFullYear(), today.getMonth(), 1).getTime();
+        const startOfDay = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
+        let daily = 0, monthly = 0;
+        Object.values(sales).forEach(sale => {
+            const saleDate = new Date(sale.data).getTime();
+            if (saleDate >= startOfMonth) monthly += sale.total;
+            if (saleDate >= startOfDay) daily += sale.total;
+        });
+        ui.erp.dashboard.dailySales.textContent = `R$ ${daily.toFixed(2)}`;
+        ui.erp.dashboard.monthlyRevenue.textContent = `R$ ${monthly.toFixed(2)}`;
+    });
+}
+
+
+// --- INICIALIZAÇÃO E EVENT LISTENERS ---
+
+function attachEventListeners() {
+    // Navegação e Autenticação
+    ui.authButton.addEventListener('click', handleAuthClick);
+    ui.nav.home.addEventListener('click', (e) => { e.preventDefault(); switchView('public'); });
+    ui.nav.shop.addEventListener('click', (e) => { e.preventDefault(); switchView('public'); });
+    ui.nav.dashboard.addEventListener('click', (e) => { e.preventDefault(); switchView('management'); });
+    ui.erp.tabs.forEach(button => button.addEventListener('click', () => switchTab(button.dataset.tab)));
+
+    // Delegação de Eventos para botões dinâmicos
+    document.body.addEventListener('click', e => {
+        const target = e.target.closest('button');
+        if (!target) return;
+
+        const datasetId = target.dataset.id;
+        
+        if (target.classList.contains('add-to-cart-button')) addToCart(datasetId);
+        else if (target.classList.contains('remove-from-cart-button')) removeFromCart(datasetId);
+        else if (target.classList.contains('edit-product-button')) openEditProductModal(datasetId);
+        else if (target.classList.contains('delete-product-button')) deleteProduct(datasetId);
+        else if (target.classList.contains('edit-supplier-button')) openEditSupplierModal(datasetId);
+        else if (target.classList.contains('delete-supplier-button')) deleteSupplier(datasetId);
+        else if (target.classList.contains('edit-customer-button')) openEditCustomerModal(datasetId);
+        else if (target.classList.contains('delete-customer-button')) deleteCustomer(datasetId);
+        else if (target.classList.contains('confirm-receipt-button')) confirmPurchaseReceipt(datasetId);
+        else if (target.classList.contains('delete-purchase-button')) deletePurchase(datasetId);
+        else if (target.classList.contains('confirm-sale-button')) confirmSale(datasetId);
+        else if (target.classList.contains('cancel-order-button')) cancelOrder(datasetId);
+        else if (target.classList.contains('confirm-finance-button')) confirmFinanceTransaction(datasetId, target.dataset.type);
+        else if (target.classList.contains('remove-purchase-item-button')) removeItemFromPurchase(datasetId);
+    });
+
+    // Modais
+    ui.nav.cart.addEventListener('click', (e) => { e.preventDefault(); toggleModal(ui.cart.modal, true); });
+    ui.cart.closeButton.addEventListener('click', () => toggleModal(ui.cart.modal, false));
+    ui.cart.checkoutButton.addEventListener('click', () => {
+        toggleModal(ui.cart.modal, false);
+        toggleModal(ui.checkout.modal, true);
+    });
+    ui.checkout.closeButton.addEventListener('click', () => toggleModal(ui.checkout.modal, false));
+    ui.checkout.submitButton.addEventListener('click', submitCheckout);
+
+    // Modais do ERP
+    ui.erp.stock.addButton.addEventListener('click', openNewProductModal);
+    ui.erp.stock.closeModalButton.addEventListener('click', () => toggleModal(ui.erp.stock.modal, false));
+    ui.erp.stock.saveButton.addEventListener('click', saveProduct);
+
+    ui.erp.suppliers.addButton.addEventListener('click', openNewSupplierModal);
+    ui.erp.suppliers.closeModalButton.addEventListener('click', () => toggleModal(ui.erp.suppliers.modal, false));
+    ui.erp.suppliers.saveButton.addEventListener('click', saveSupplier);
+
+    ui.erp.customers.addButton.addEventListener('click', openNewCustomerModal);
+    ui.erp.customers.closeModalButton.addEventListener('click', () => toggleModal(ui.erp.customers.modal, false));
+    ui.erp.customers.saveButton.addEventListener('click', saveCustomer);
+    
+    ui.erp.purchases.newButton.addEventListener('click', openNewPurchaseModal);
+    ui.erp.purchases.closeModalButton.addEventListener('click', () => toggleModal(ui.erp.purchases.modal, false));
+    ui.erp.purchases.addItemButton.addEventListener('click', addItemToPurchase);
+    ui.erp.purchases.saveButton.addEventListener('click', savePurchase);
+    
+    ui.erp.finance.generateReportBtn.addEventListener('click', generateSalesReport);
+    ui.erp.finance.exportCsvBtn.addEventListener('click', exportToCSV);
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    querySelAll('.modal-backdrop').forEach(modal => modal.classList.add('hidden'));
+    loadPublicProducts();
+    attachEventListeners();
+    updateCartDisplay();
 });
-
-// ================================
-// 🔧 FUNÇÕES GLOBAIS
-// ================================
-
-window.addToCart = addToCart;
-window.openCheckout = openCheckout;
-window.openProductModal = openProductModal;
-window.deleteProduct = deleteProduct;
-window.viewKardex = viewKardex;
-window.logout = logout;
