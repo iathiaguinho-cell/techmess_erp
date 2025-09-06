@@ -30,10 +30,10 @@ const database = firebase.database();
 let cart = {};
 let products = {};
 let suppliers = {};
-let customers = {}; // <-- Novo estado para clientes
+let customers = {};
 let currentPurchaseItems = {};
-let salesReportData = [];
-let isErpInitialized = false;
+let currentSaleItems = {};
+let currentOrderToConfirm = null;
 
 // --- SELETORES DE ELEMENTOS DO DOM (CACHE) ---
 const getElem = (id) => document.getElementById(id);
@@ -68,6 +68,26 @@ const ui = {
         whatsappInput: getElem('customer-whatsapp'),
         submitButton: getElem('submit-checkout')
     },
+    paymentConfirmationModal: {
+        modal: getElem('payment-confirmation-modal'),
+        closeButton: getElem('close-payment-confirmation-modal'),
+        processButton: getElem('process-sale-confirmation-button'),
+        paymentMethodSelect: getElem('confirm-sale-payment-method'),
+        installmentFields: getElem('installment-fields'),
+        installmentsInput: getElem('confirm-sale-installments'),
+        firstDueDateInput: getElem('confirm-sale-first-due-date'),
+        itemsContainer: getElem('order-items-to-confirm'),
+        newTotalSpan: getElem('confirm-sale-new-total'),
+    },
+    expenseModal: {
+        modal: getElem('expense-form-modal'),
+        closeButton: getElem('close-expense-form-modal'),
+        saveButton: getElem('save-expense-button'),
+        descriptionInput: getElem('expense-description'),
+        valueInput: getElem('expense-value'),
+        dueDateInput: getElem('expense-due-date'),
+        categorySelect: getElem('expense-category'),
+    },
     erp: {
         tabs: querySelAll('.tab-button'),
         contents: querySelAll('.tab-content'),
@@ -75,20 +95,25 @@ const ui = {
             content: getElem('dashboard-content'),
             monthlyRevenue: getElem('monthly-revenue'),
             dailySales: getElem('daily-sales'),
-            lowStockAlerts: getElem('low-stock-alerts')
+            lowStockAlerts: getElem('low-stock-alerts'),
+            resetSystemButton: getElem('reset-system-button')
         },
         sales: {
             content: getElem('sales-content'),
             pendingOrders: getElem('pending-orders'),
-            historyList: getElem('sales-history-list')
+            historyList: getElem('sales-history-list'),
+            newSaleButton: getElem('new-sale-button'),
+            manualSaleModal: getElem('manual-sale-modal'),
+            closeManualSaleModal: getElem('close-manual-sale-modal'),
+            saveManualSaleButton: getElem('save-manual-sale-button'),
+            customerSelect: getElem('sale-customer'),
+            productSelect: getElem('sale-product'),
+            quantityInput: getElem('sale-quantity'),
+            addItemButton: getElem('add-item-to-sale-button'),
+            itemsList: getElem('sale-items-list'),
+            total: getElem('sale-total')
         },
-        purchases: {
-            // ... (sem alterações aqui)
-        },
-        stock: {
-            // ... (sem alterações aqui)
-        },
-        customers: { // <-- Nova seção de seletores para clientes
+        customers: {
             content: getElem('customers-content'),
             addButton: getElem('add-customer-button'),
             list: getElem('customer-list'),
@@ -102,13 +127,6 @@ const ui = {
             emailInput: getElem('new-customer-email'),
             notesInput: getElem('new-customer-notes')
         },
-        finance: {
-            // ... (sem alterações aqui)
-        },
-        suppliers: {
-            // ... (sem alterações aqui)
-        },
-        // Adicione outros seletores se necessário, mantendo a estrutura
         purchases: {
             content: getElem('purchases-content'),
             newButton: getElem('new-purchase-button'),
@@ -145,13 +163,10 @@ const ui = {
         },
         finance: {
             content: getElem('finance-content'),
-            transactions: getElem('financial-transactions'),
             cashBalance: getElem('cash-balance'),
-            reportStartDate: getElem('report-start-date'),
-            reportEndDate: getElem('report-end-date'),
-            generateReportBtn: getElem('generate-report-button'),
-            exportCsvBtn: getElem('export-csv-button'),
-            reportResults: getElem('report-results')
+            accountsReceivable: getElem('accounts-receivable'),
+            accountsPayable: getElem('accounts-payable'),
+            newExpenseButton: getElem('new-expense-button'),
         },
         suppliers: {
             content: getElem('suppliers-content'),
@@ -194,24 +209,12 @@ function switchTab(tabId) {
 }
 
 function toggleModal(modalElement, show) {
-    modalElement.classList.toggle('hidden', !show);
+    if (modalElement) {
+        modalElement.classList.toggle('hidden', !show);
+    }
 }
 
 // --- AUTENTICAÇÃO E INICIALIZAÇÃO DO PAINEL ---
-
-function initializeErpPanel() {
-    if (isErpInitialized) return;
-    console.log("A inicializar dados do Painel de Gestão...");
-    loadStockManagement();
-    loadSupplierManagement();
-    loadCustomerManagement(); // <-- Carrega clientes
-    loadPurchases();
-    loadSales();
-    loadSalesHistory();
-    loadFinance();
-    calculateDailySalesAndMonthlyRevenue();
-    isErpInitialized = true;
-}
 
 auth.onAuthStateChanged(user => {
     const isLoggedIn = !!user;
@@ -220,10 +223,17 @@ auth.onAuthStateChanged(user => {
     
     if (isLoggedIn) {
         switchView('management');
-        initializeErpPanel();
+        console.log("Usuário autenticado. Carregando/sincronizando dados do painel...");
+        loadStockManagement(); 
+        loadSupplierManagement();
+        loadCustomerManagement();
+        loadPurchases();
+        loadSales();
+        loadSalesHistory();
+        loadFinance();
+        calculateDailySalesAndMonthlyRevenue();
     } else {
         switchView('public');
-        isErpInitialized = false;
     }
 });
 
@@ -241,7 +251,6 @@ function handleAuthClick() {
 }
 
 // --- MÓDULO: VITRINE PÚBLICA (E-COMMERCE) ---
-// ... (sem alterações neste módulo)
 function loadPublicProducts() {
     database.ref('estoque').on('value', snapshot => {
         products = snapshot.val() || {};
@@ -315,9 +324,48 @@ function updateCartDisplay() {
     }
 }
 
+async function submitCheckout() {
+    const name = ui.checkout.nameInput.value.trim();
+    const whatsapp = ui.checkout.whatsappInput.value.trim();
+
+    if (!name || !whatsapp || Object.keys(cart).length === 0) {
+        alert('Por favor, preencha todos os campos e adicione itens ao carrinho.');
+        return;
+    }
+
+    const newCustomerData = {
+        nome: name,
+        nome_lowercase: name.toLowerCase(),
+        whatsapp: whatsapp,
+        dataCadastro: new Date().toISOString()
+    };
+    const newCustomerRef = await database.ref('clientes').push(newCustomerData);
+    const customerId = newCustomerRef.key;
+
+    const order = {
+        clienteId: customerId,
+        cliente: name,
+        whatsapp: whatsapp,
+        itens: cart,
+        total: Object.values(cart).reduce((sum, item) => sum + item.quantity * item.precoVenda, 0),
+        status: 'pendente',
+        data: new Date().toISOString()
+    };
+
+    database.ref('pedidos').push(order).then(() => {
+        alert('Pedido realizado com sucesso! Nossa equipe entrará em contato.');
+        cart = {};
+        updateCartDisplay();
+        toggleModal(ui.checkout.modal, false);
+        ui.checkout.nameInput.value = '';
+        ui.checkout.whatsappInput.value = '';
+    }).catch(error => {
+        console.error("Erro no checkout:", error);
+        alert('Erro ao realizar pedido: ' + error.message);
+    });
+}
 
 // --- MÓDULO: CLIENTES (CRM) ---
-
 function openNewCustomerModal() {
     ui.erp.customers.title.textContent = 'Adicionar Novo Cliente';
     ui.erp.customers.idInput.value = '';
@@ -401,58 +449,330 @@ function loadCustomerManagement() {
     });
 }
 
-// Atualização na função de checkout para integrar com o CRM
-async function submitCheckout() {
-    const name = ui.checkout.nameInput.value.trim();
-    const whatsapp = ui.checkout.whatsappInput.value.trim();
+// --- MÓDULO: VENDAS (ERP) ---
+function openNewSaleModal() {
+    if (Object.keys(customers).length === 0 || Object.keys(products).length === 0) {
+        alert("É necessário ter pelo menos um cliente e um produto cadastrado para gerar uma venda.");
+        return;
+    }
+    
+    const customerOptions = Object.entries(customers).map(([id, c]) => `<option value="${id}">${c.nome}</option>`).join('');
+    ui.erp.sales.customerSelect.innerHTML = customerOptions;
 
-    if (!name || !whatsapp || Object.keys(cart).length === 0) {
-        alert('Por favor, preencha todos os campos e adicione itens ao carrinho.');
+    const productOptions = Object.entries(products).map(([id, p]) => `<option value="${id}">${p.nome} - R$ ${p.precoVenda.toFixed(2)}</option>`).join('');
+    ui.erp.sales.productSelect.innerHTML = productOptions;
+
+    ui.erp.sales.dateInput.value = new Date().toISOString().split('T')[0];
+    currentSaleItems = {};
+    updateSaleItemsList();
+    toggleModal(ui.erp.sales.manualSaleModal, true);
+}
+
+function addItemToSale() {
+    const productId = ui.erp.sales.productSelect.value;
+    const quantity = parseInt(ui.erp.sales.quantityInput.value);
+    const product = products[productId];
+
+    if (!productId || isNaN(quantity) || quantity <= 0) {
+        alert("Dados do item inválidos.");
+        return;
+    }
+    
+    if (product.quantidade < quantity) {
+        alert(`Estoque insuficiente para ${product.nome}. Apenas ${product.quantidade} unidades disponíveis.`);
         return;
     }
 
-    // Procura por cliente existente ou cria um novo ID
-    let customerId = null;
-    const customerQuery = await database.ref('clientes').orderByChild('whatsapp').equalTo(whatsapp).once('value');
-    if (customerQuery.exists()) {
-        customerId = Object.keys(customerQuery.val())[0];
-    } else {
-        const newCustomerData = {
-            nome: name,
-            nome_lowercase: name.toLowerCase(),
-            whatsapp: whatsapp,
-            dataCadastro: new Date().toISOString()
-        };
-        const newCustomerRef = await database.ref('clientes').push(newCustomerData);
-        customerId = newCustomerRef.key;
+    currentSaleItems[productId] = { 
+        ...product,
+        quantity: (currentSaleItems[productId]?.quantity || 0) + quantity 
+    };
+    updateSaleItemsList();
+}
+
+function updateSaleItemsList() {
+    let total = 0;
+    ui.erp.sales.itemsList.innerHTML = Object.entries(currentSaleItems).map(([id, item]) => {
+        total += item.quantity * item.precoVenda;
+        return `
+            <div class="sale-item-row flex justify-between items-center p-2 bg-gray-700 rounded mb-1" data-id="${id}" data-quantity="${item.quantity}">
+                <span>${item.quantity}x ${item.nome}</span>
+                <div class="flex items-center gap-2">
+                    <span>R$</span>
+                    <input type="number" value="${item.precoVenda.toFixed(2)}" class="item-price-input form-input w-32 text-right" step="0.01">
+                    <button class="text-red-400 hover:text-red-600 remove-sale-item-button" data-id="${id}">&times;</button>
+                </div>
+            </div>
+        `;
+    }).join('');
+    
+    recalculateSaleTotal('#sale-items-list', '#sale-total');
+}
+
+function removeItemFromSale(productId) {
+    delete currentSaleItems[productId];
+    updateSaleItemsList();
+}
+
+async function saveManualSale() {
+    const customerId = ui.erp.sales.customerSelect.value;
+    const saleDate = ui.erp.sales.dateInput.value;
+    const customer = customers[customerId];
+
+    if (!customerId || !saleDate || Object.keys(currentSaleItems).length === 0) {
+        alert("Preencha todos os campos da venda (cliente, data) e adicione itens.");
+        return;
     }
 
-    const order = {
-        clienteId: customerId, // Salva o ID do cliente no pedido
-        cliente: name,
-        whatsapp: whatsapp,
-        itens: cart,
-        total: Object.values(cart).reduce((sum, item) => sum + item.quantity * item.precoVenda, 0),
-        status: 'pendente',
-        data: new Date().toISOString()
-    };
+    const finalItems = {};
+    let finalTotal = 0;
+    document.querySelectorAll('#sale-items-list .sale-item-row').forEach(row => {
+        const id = row.dataset.id;
+        const quantity = parseInt(row.dataset.quantity);
+        const finalPrice = parseFloat(row.querySelector('.item-price-input').value);
+        
+        finalItems[id] = {
+            ...currentSaleItems[id],
+            precoVenda: finalPrice,
+            quantity: quantity,
+        };
+        finalTotal += quantity * finalPrice;
+    });
 
-    database.ref('pedidos').push(order).then(() => {
-        alert('Pedido realizado com sucesso!');
-        cart = {};
-        updateCartDisplay();
-        toggleModal(ui.checkout.modal, false);
-        ui.checkout.nameInput.value = '';
-        ui.checkout.whatsappInput.value = '';
-    }).catch(error => {
-        console.error("Erro no checkout:", error);
-        alert('Erro ao realizar pedido: ' + error.message);
+    const updates = {};
+    for (const [itemId, item] of Object.entries(finalItems)) {
+        updates[`/estoque/${itemId}/quantidade`] = firebase.database.ServerValue.increment(-item.quantity);
+    }
+    await database.ref().update(updates);
+    
+    const saleData = {
+        clienteId: customerId,
+        cliente: customer.nome,
+        whatsapp: customer.whatsapp,
+        itens: finalItems,
+        total: finalTotal,
+        data: new Date(saleDate + 'T12:00:00Z').toISOString(),
+        status: 'Concluída',
+        pagamento: {
+            metodo: 'A definir',
+            status: 'Pendente'
+        }
+    };
+    const newSaleRef = await database.ref('vendas').push(saleData);
+
+    await database.ref('contasReceber').push({
+        vendaId: newSaleRef.key,
+        clienteId: customerId,
+        clienteNome: customer.nome,
+        descricao: `Venda Manual #${newSaleRef.key.slice(-5)}`,
+        valor: finalTotal,
+        dataVencimento: saleData.data.split('T')[0],
+        status: 'Pendente'
+    });
+    
+    alert("Venda manual gerada com sucesso!");
+    toggleModal(ui.erp.sales.manualSaleModal, false);
+}
+
+function loadSales() {
+    database.ref('pedidos').orderByChild('status').equalTo('pendente').on('value', snapshot => {
+        const orders = snapshot.val() || {};
+        window.pendingOrdersData = orders;
+        const tableBody = Object.entries(orders).map(([id, order]) => {
+            const itemsList = Object.values(order.itens).map(item => `${item.nome} (${item.quantity})`).join(', ');
+            return `
+                <tr>
+                    <td>${new Date(order.data).toLocaleDateString()}</td>
+                    <td>${order.cliente}</td>
+                    <td>${order.whatsapp}</td>
+                    <td class="text-xs">${itemsList}</td>
+                    <td>R$ ${order.total.toFixed(2).replace('.',',')}</td>
+                    <td>
+                        <button class="confirm-sale-button bg-green-600 text-white text-xs px-2 py-1 rounded" data-id="${id}">Confirmar</button>
+                        <button class="cancel-order-button bg-red-600 text-white text-xs px-2 py-1 rounded ml-2" data-id="${id}">Cancelar</button>
+                    </td>
+                </tr>`;
+        }).join('');
+        
+        ui.erp.sales.pendingOrders.innerHTML = Object.keys(orders).length > 0 ? `
+            <table class="w-full text-sm">
+                <thead><tr><th>Data</th><th>Cliente</th><th>WhatsApp</th><th>Itens</th><th>Total</th><th>Ações</th></tr></thead>
+                <tbody>${tableBody}</tbody>
+            </table>` : '<p>Nenhum pedido pendente.</p>';
     });
 }
 
+function loadSalesHistory() {
+    database.ref('vendas').limitToLast(25).on('value', snapshot => {
+        const sales = snapshot.val() || {};
+        const reversedSales = Object.entries(sales).reverse();
+
+        if (reversedSales.length === 0) {
+            ui.erp.sales.historyList.innerHTML = '<p>Nenhuma venda foi confirmada ainda.</p>';
+            return;
+        }
+
+        const tableBody = reversedSales.map(([id, sale]) => {
+            const itemsList = Object.values(sale.itens).map(item => `${item.nome} (${item.quantity})`).join(', ');
+            return `
+                <tr>
+                    <td>${new Date(sale.data).toLocaleDateString()}</td>
+                    <td>${sale.cliente}</td>
+                    <td>${sale.pagamento.metodo} (${sale.pagamento.parcelas || 1}x)</td>
+                    <td class="text-xs">${itemsList}</td>
+                    <td>R$ ${sale.total.toFixed(2).replace('.',',')}</td>
+                </tr>`;
+        }).join('');
+        
+        ui.erp.sales.historyList.innerHTML = `
+            <table class="w-full text-sm">
+                <thead><tr><th>Data</th><th>Cliente</th><th>Pagamento</th><th>Itens</th><th>Total</th></tr></thead>
+                <tbody>${tableBody}</tbody>
+            </table>`;
+    });
+}
+
+function openPaymentConfirmationModal(orderId) {
+    currentOrderToConfirm = { id: orderId, ...window.pendingOrdersData[orderId] };
+    const order = currentOrderToConfirm;
+
+    ui.paymentConfirmationModal.itemsContainer.innerHTML = Object.entries(order.itens).map(([id, item]) => `
+        <div class="sale-item-row flex justify-between items-center p-2 bg-gray-700 rounded mb-1" data-id="${id}" data-quantity="${item.quantity}">
+            <span>${item.quantity}x ${item.nome}</span>
+            <div class="flex items-center gap-2">
+                <span>R$</span>
+                <input type="number" value="${item.precoVenda.toFixed(2)}" class="item-price-input form-input w-32 text-right" step="0.01">
+            </div>
+        </div>
+    `).join('');
+
+    recalculateSaleTotal('#order-items-to-confirm', '#confirm-sale-new-total');
+    
+    const today = new Date().toISOString().split('T')[0];
+    ui.paymentConfirmationModal.firstDueDateInput.value = today;
+    ui.paymentConfirmationModal.installmentsInput.value = 1;
+    ui.paymentConfirmationModal.paymentMethodSelect.value = 'Pix';
+    toggleInstallmentFields();
+    toggleModal(ui.paymentConfirmationModal.modal, true);
+}
+
+function toggleInstallmentFields() {
+    const method = ui.paymentConfirmationModal.paymentMethodSelect.value;
+    const show = method === 'Boleto' || method === 'Cartão de Crédito';
+    ui.paymentConfirmationModal.installmentFields.classList.toggle('hidden', !show);
+}
+
+async function processSaleConfirmation() {
+    if (!currentOrderToConfirm) {
+        alert("Erro: Pedido não encontrado.");
+        return;
+    }
+
+    const orderId = currentOrderToConfirm.id;
+    const order = currentOrderToConfirm;
+    
+    const paymentMethod = ui.paymentConfirmationModal.paymentMethodSelect.value;
+    const installments = parseInt(ui.paymentConfirmationModal.installmentsInput.value) || 1;
+    const firstDueDate = ui.paymentConfirmationModal.firstDueDateInput.value;
+    
+    if ((paymentMethod === 'Boleto' || paymentMethod === 'Cartão de Crédito') && !firstDueDate) {
+        alert("Para esta forma de pagamento, a data do primeiro vencimento é obrigatória.");
+        return;
+    }
+    
+    const finalItems = {};
+    let finalTotal = 0;
+    document.querySelectorAll('#order-items-to-confirm .sale-item-row').forEach(row => {
+        const id = row.dataset.id;
+        const originalItem = order.itens[id];
+        const finalPrice = parseFloat(row.querySelector('.item-price-input').value);
+        
+        finalItems[id] = { ...originalItem, precoVenda: finalPrice };
+        finalTotal += originalItem.quantity * finalPrice;
+    });
+
+
+    const updates = {};
+    let hasEnoughStock = true;
+    for (const [itemId, item] of Object.entries(finalItems)) {
+        const product = products[itemId];
+        if (!product || product.quantidade < item.quantity) {
+            hasEnoughStock = false;
+            alert(`Estoque insuficiente para ${item.nome}. Venda não confirmada.`);
+            break;
+        }
+        updates[`/estoque/${itemId}/quantidade`] = firebase.database.ServerValue.increment(-item.quantity);
+    }
+
+    if (!hasEnoughStock) return;
+
+    try {
+        await database.ref().update(updates);
+
+        const saleData = {
+            ...order,
+            itens: finalItems,
+            total: finalTotal,
+            status: 'Concluída',
+            pagamento: {
+                metodo: paymentMethod,
+                parcelas: installments,
+                status: 'A Receber'
+            }
+        };
+        delete saleData.id;
+        
+        const newSaleRef = await database.ref('vendas').push(saleData);
+        
+        const installmentValue = finalTotal / installments;
+        for (let i = 1; i <= installments; i++) {
+            const dueDate = new Date(firstDueDate + 'T12:00:00Z');
+            dueDate.setMonth(dueDate.getMonth() + (i - 1));
+
+            const installmentData = {
+                vendaId: newSaleRef.key,
+                clienteId: order.clienteId,
+                clienteNome: order.cliente,
+                descricao: `Parcela ${i}/${installments} - Venda #${newSaleRef.key.slice(-5)}`,
+                valor: installmentValue,
+                dataVencimento: dueDate.toISOString().split('T')[0],
+                status: 'Pendente'
+            };
+            await database.ref('contasReceber').push(installmentData);
+        }
+
+        await database.ref('pedidos/' + orderId).remove();
+
+        alert('Venda confirmada com sucesso! As parcelas foram geradas em Contas a Receber.');
+        toggleModal(ui.paymentConfirmationModal.modal, false);
+        currentOrderToConfirm = null;
+
+    } catch (error) {
+        alert('Ocorreu um erro ao processar a venda: ' + error.message);
+    }
+}
+
+function cancelOrder(orderId) {
+    if (confirm('Tem a certeza de que deseja cancelar este pedido?')) {
+        database.ref('pedidos/' + orderId).remove().then(() => alert('Pedido cancelado!'));
+    }
+}
+
+function recalculateSaleTotal(containerSelector, totalSelector) {
+    let total = 0;
+    const items = document.querySelectorAll(`${containerSelector} .sale-item-row`);
+    items.forEach(itemRow => {
+        const quantity = parseFloat(itemRow.dataset.quantity);
+        const priceInput = itemRow.querySelector('.item-price-input');
+        const price = parseFloat(priceInput.value);
+        if (!isNaN(quantity) && !isNaN(price)) {
+            total += quantity * price;
+        }
+    });
+    document.querySelector(totalSelector).textContent = `R$ ${total.toFixed(2).replace('.',',')}`;
+}
 
 // --- MÓDULO: ESTOQUE (ERP) ---
-// ... (sem alterações)
 async function saveProduct() {
     const id = ui.erp.stock.idInput.value;
     const name = ui.erp.stock.nameInput.value;
@@ -566,118 +886,7 @@ function deleteProduct(productId) {
     }
 }
 
-
-// --- MÓDULO: VENDAS (ERP) ---
-// ... (sem alterações aqui, além das que já fizemos)
-function loadSales() {
-    database.ref('pedidos').orderByChild('status').equalTo('pendente').on('value', snapshot => {
-        const orders = snapshot.val() || {};
-        const tableBody = Object.entries(orders).map(([id, order]) => {
-            const itemsList = Object.values(order.itens).map(item => `${item.nome} (${item.quantity})`).join(', ');
-            return `
-                <tr>
-                    <td>${new Date(order.data).toLocaleDateString()}</td>
-                    <td>${order.cliente}</td>
-                    <td>${order.whatsapp}</td>
-                    <td class="text-xs">${itemsList}</td>
-                    <td>R$ ${order.total.toFixed(2)}</td>
-                    <td>
-                        <button class="confirm-sale-button bg-green-600 text-white text-xs px-2 py-1 rounded" data-id="${id}">Confirmar</button>
-                        <button class="cancel-order-button bg-red-600 text-white text-xs px-2 py-1 rounded ml-2" data-id="${id}">Cancelar</button>
-                    </td>
-                </tr>`;
-        }).join('');
-        
-        ui.erp.sales.pendingOrders.innerHTML = Object.keys(orders).length > 0 ? `
-            <table class="w-full text-sm">
-                <thead><tr><th>Data</th><th>Cliente</th><th>WhatsApp</th><th>Itens</th><th>Total</th><th>Ações</th></tr></thead>
-                <tbody>${tableBody}</tbody>
-            </table>` : '<p>Nenhum pedido pendente para confirmar.</p>';
-    });
-}
-
-function loadSalesHistory() {
-    database.ref('vendas').limitToLast(25).on('value', snapshot => {
-        const sales = snapshot.val() || {};
-        const reversedSales = Object.entries(sales).reverse();
-
-        if (reversedSales.length === 0) {
-            ui.erp.sales.historyList.innerHTML = '<p>Nenhuma venda foi confirmada ainda.</p>';
-            return;
-        }
-
-        const tableBody = reversedSales.map(([id, sale]) => {
-            const itemsList = Object.values(sale.itens).map(item => `${item.nome} (${item.quantity})`).join(', ');
-            return `
-                <tr>
-                    <td>${new Date(sale.data).toLocaleDateString()}</td>
-                    <td>${sale.cliente}</td>
-                    <td>${sale.whatsapp}</td>
-                    <td class="text-xs">${itemsList}</td>
-                    <td>R$ ${sale.total.toFixed(2)}</td>
-                </tr>`;
-        }).join('');
-        
-        ui.erp.sales.historyList.innerHTML = `
-            <table class="w-full text-sm">
-                <thead><tr><th>Data</th><th>Cliente</th><th>WhatsApp</th><th>Itens</th><th>Total</th></tr></thead>
-                <tbody>${tableBody}</tbody>
-            </table>`;
-    });
-}
-
-async function confirmSale(orderId) {
-    const orderRef = database.ref('pedidos/' + orderId);
-    const orderSnapshot = await orderRef.once('value');
-    const order = orderSnapshot.val();
-
-    if (!order || !confirm('Confirmar esta venda? O estoque será atualizado.')) return;
-
-    const updates = {};
-    let hasEnoughStock = true;
-    const stockChecks = [];
-
-    for (const [itemId, item] of Object.entries(order.itens)) {
-        const check = database.ref('estoque/' + itemId).once('value').then(snapshot => {
-            const product = snapshot.val();
-            if (!product || product.quantidade < item.quantity) {
-                hasEnoughStock = false;
-                alert(`Estoque insuficiente para ${item.nome}. Venda não confirmada.`);
-            } else {
-                updates[`/estoque/${itemId}/quantidade`] = firebase.database.ServerValue.increment(-item.quantity);
-            }
-        });
-        stockChecks.push(check);
-    }
-    
-    await Promise.all(stockChecks);
-
-    if (!hasEnoughStock) {
-        return;
-    }
-
-    await database.ref().update(updates);
-    const newSaleRef = await database.ref('vendas').push(order);
-    const newSaleId = newSaleRef.key;
-    await database.ref('fluxoDeCaixa').push({
-        tipo: 'Receber',
-        descricao: `Venda #${newSaleId.slice(-5)} - ${order.cliente}`,
-        valor: order.total,
-        data: order.data,
-        status: 'Pendente'
-    });
-    await orderRef.remove();
-    alert('Venda confirmada e estoque atualizado!');
-}
-
-function cancelOrder(orderId) {
-    if (confirm('Tem a certeza de que deseja cancelar este pedido?')) {
-        database.ref('pedidos/' + orderId).remove().then(() => alert('Pedido cancelado!'));
-    }
-}
-
-
-// --- Restante do código (Fornecedores, Compras, Financeiro, etc.) permanece o mesmo ---
+// --- MÓDULO: COMPRAS E FORNECEDORES ---
 function saveSupplier() {
     const id = ui.erp.suppliers.idInput.value;
     const name = ui.erp.suppliers.nameInput.value.trim();
@@ -741,7 +950,6 @@ function deleteSupplier(id) {
         .catch(e => alert("Erro: " + e.message));
     }
 }
-
 
 function openNewPurchaseModal() {
     const supplierOptions = Object.entries(suppliers).map(([id, s]) => `<option value="${id}">${s.nome}</option>`).join('');
@@ -830,9 +1038,9 @@ function loadPurchases() {
                 <td>${new Date(p.dataCompra).toLocaleDateString('pt-BR', {timeZone: 'UTC'})}</td>
                 <td>${p.numeroNota}</td>
                 <td>${p.fornecedorNome}</td>
-                <td>R$ ${p.total.toFixed(2)}</td>
+                <td>R$ ${p.total.toFixed(2).replace('.',',')}</td>
                 <td>${p.formaPagamento}</td>
-                <td>${p.status}</td>
+                <td><span class="px-2 py-1 text-xs rounded-full ${p.status === 'Recebido' ? 'bg-green-700' : 'bg-yellow-700'}">${p.status}</span></td>
                 <td class="flex items-center">
                     ${p.status === 'Aguardando Recebimento' ? `<button class="confirm-receipt-button bg-green-600 text-white text-xs px-2 py-1 rounded" data-id="${id}">Receber</button>` : ''}
                     <button class="delete-purchase-button bg-red-600 hover:bg-red-700 text-white text-xs px-2 py-1 rounded ml-2" data-id="${id}">Excluir</button>
@@ -869,126 +1077,146 @@ async function confirmPurchaseReceipt(purchaseId) {
     const purchaseRef = database.ref('compras/' + purchaseId);
     const purchaseSnapshot = await purchaseRef.once('value');
     const purchase = purchaseSnapshot.val();
-    if (purchase && confirm('Confirmar o recebimento desta compra? O estoque será atualizado.')) {
+    if (purchase && confirm('Confirmar o recebimento desta compra? O estoque será atualizado e uma conta a pagar será gerada.')) {
         const updates = {};
         for (const [itemId, item] of Object.entries(purchase.itens)) {
             updates[`/estoque/${itemId}/quantidade`] = firebase.database.ServerValue.increment(item.quantity);
         }
         await database.ref().update(updates);
 
-        await database.ref('fluxoDeCaixa').push({
-            tipo: 'Pagar',
-            descricao: `Compra NF #${purchase.numeroNota} - ${purchase.fornecedorNome}`,
+        await database.ref('contasPagar').push({
+            compraId: purchaseId,
+            fornecedorId: purchase.fornecedorId,
+            fornecedorNome: purchase.fornecedorNome,
+            descricao: `Pagamento NF #${purchase.numeroNota}`,
             valor: purchase.total,
-            data: purchase.dataCompra,
+            dataVencimento: purchase.dataCompra,
             status: 'Pendente'
         });
         
         await purchaseRef.update({ status: 'Recebido' });
-        alert('Recebimento confirmado e estoque atualizado!');
+        alert('Recebimento confirmado, estoque atualizado e conta a pagar gerada!');
     }
 }
 
+// --- MÓDULO FINANCEIRO ---
+function openNewExpenseModal() {
+    ui.expenseModal.descriptionInput.value = '';
+    ui.expenseModal.valueInput.value = '';
+    ui.expenseModal.dueDateInput.value = new Date().toISOString().split('T')[0];
+    ui.expenseModal.categorySelect.value = 'Custo Fixo';
+    toggleModal(ui.expenseModal.modal, true);
+}
+
+function saveExpense() {
+    const description = ui.expenseModal.descriptionInput.value.trim();
+    const value = parseFloat(ui.expenseModal.valueInput.value);
+    const dueDate = ui.expenseModal.dueDateInput.value;
+    const category = ui.expenseModal.categorySelect.value;
+
+    if (!description || isNaN(value) || value <= 0 || !dueDate) {
+        alert("Preencha todos os campos da despesa corretamente.");
+        return;
+    }
+
+    const expenseData = {
+        descricao: description,
+        categoria: category,
+        valor: value,
+        dataVencimento: dueDate,
+        status: 'Pendente'
+    };
+
+    database.ref('contasPagar').push(expenseData).then(() => {
+        alert("Despesa lançada com sucesso!");
+        toggleModal(ui.expenseModal.modal, false);
+    }).catch(error => {
+        alert("Erro ao salvar despesa: " + error.message);
+    });
+}
 
 function loadFinance() {
-    database.ref('fluxoDeCaixa').on('value', (snapshot) => {
-        const transactions = snapshot.val() || {};
-        let balance = 0;
-        const tableBody = Object.entries(transactions).map(([id, t]) => {
-            const isSettled = t.status === 'Recebido' || t.status === 'Paga';
-            if (t.status === 'Recebido') balance += t.valor;
-            if (t.status === 'Paga') balance -= t.valor;
-            const isReceber = t.tipo === 'Receber';
-            const valorClass = isReceber ? 'text-green-400' : 'text-red-400';
-            const valorSignal = isReceber ? '+' : '-';
+    database.ref('contasReceber').orderByChild('dataVencimento').on('value', (snapshot) => {
+        const accounts = snapshot.val() || {};
+        const tableBody = Object.entries(accounts).map(([id, acc]) => {
+            const isPaid = acc.status === 'Recebido';
             return `
             <tr>
-                <td>${new Date(t.data).toLocaleDateString('pt-BR', {timeZone: 'UTC'})}</td>
-                <td>${t.tipo}</td>
-                <td>${t.descricao}</td>
-                <td class="${valorClass}">${valorSignal} R$ ${t.valor.toFixed(2)}</td>
-                <td>${t.status}</td>
-                <td>${!isSettled ? `<button class="confirm-finance-button bg-green-600 text-white text-xs px-2 py-1 rounded" data-id="${id}" data-type="${t.tipo}">Confirmar</button>` : 'Liquidado'}</td>
+                <td>${new Date(acc.dataVencimento + 'T12:00:00Z').toLocaleDateString()}</td>
+                <td>${acc.clienteNome || 'N/A'}</td>
+                <td>${acc.descricao}</td>
+                <td class="text-green-400">+ R$ ${acc.valor.toFixed(2).replace('.',',')}</td>
+                <td><span class="px-2 py-1 text-xs rounded-full ${isPaid ? 'bg-green-700' : 'bg-yellow-700'}">${acc.status}</span></td>
+                <td>${!isPaid ? `<button class="confirm-transaction-button bg-green-600 text-white text-xs px-2 py-1 rounded" data-id="${id}" data-type="receber">Receber</button>` : `Liquidado em ${new Date(acc.dataRecebimento).toLocaleDateString()}`}</td>
             </tr>`;
         }).join('');
+        ui.erp.finance.accountsReceivable.innerHTML = `
+            <table class="w-full text-sm"><thead><tr><th>Vencimento</th><th>Cliente</th><th>Descrição</th><th>Valor</th><th>Status</th><th>Ações</th></tr></thead>
+            <tbody>${tableBody || '<tr><td colspan="6" class="text-center">Nenhuma conta a receber.</td></tr>'}</tbody></table>`;
+    });
 
-        ui.erp.finance.transactions.innerHTML = `
-            <table class="w-full text-sm">
-                <thead><tr><th>Data</th><th>Tipo</th><th>Descrição</th><th>Valor</th><th>Status</th><th>Ações</th></tr></thead>
-                <tbody>${tableBody || '<tr><td colspan="6" class="text-center">Nenhuma transação.</td></tr>'}</tbody>
-            </table>`;
-        ui.erp.finance.cashBalance.textContent = `R$ ${balance.toFixed(2)}`;
+    database.ref('contasPagar').orderByChild('dataVencimento').on('value', (snapshot) => {
+        const accounts = snapshot.val() || {};
+        const tableBody = Object.entries(accounts).map(([id, acc]) => {
+            const isPaid = acc.status === 'Paga';
+            return `
+            <tr>
+                <td>${new Date(acc.dataVencimento + 'T12:00:00Z').toLocaleDateString()}</td>
+                <td>${acc.fornecedorNome || acc.categoria}</td>
+                <td>${acc.descricao}</td>
+                <td class="text-red-400">- R$ ${acc.valor.toFixed(2).replace('.',',')}</td>
+                <td><span class="px-2 py-1 text-xs rounded-full ${isPaid ? 'bg-green-700' : 'bg-yellow-700'}">${acc.status}</span></td>
+                <td>${!isPaid ? `<button class="confirm-transaction-button bg-blue-600 text-white text-xs px-2 py-1 rounded" data-id="${id}" data-type="pagar">Pagar</button>` : `Liquidado em ${new Date(acc.dataPagamento).toLocaleDateString()}`}</td>
+            </tr>`;
+        }).join('');
+        ui.erp.finance.accountsPayable.innerHTML = `
+            <table class="w-full text-sm"><thead><tr><th>Vencimento</th><th>Fornecedor/Categoria</th><th>Descrição</th><th>Valor</th><th>Status</th><th>Ações</th></tr></thead>
+            <tbody>${tableBody || '<tr><td colspan="6" class="text-center">Nenhuma conta a pagar.</td></tr>'}</tbody></table>`;
+    });
+
+    database.ref('fluxoDeCaixa').on('value', (snapshot) => {
+        const transactions = snapshot.val() || {};
+        const balance = Object.values(transactions).reduce((acc, t) => acc + t.valor, 0);
+        ui.erp.finance.cashBalance.textContent = `R$ ${balance.toFixed(2).replace('.',',')}`;
         ui.erp.finance.cashBalance.classList.toggle('text-red-400', balance < 0);
         ui.erp.finance.cashBalance.classList.toggle('text-green-400', balance >= 0);
     });
 }
 
-function confirmFinanceTransaction(id, type) {
-    const newStatus = type === 'Receber' ? 'Recebido' : 'Paga';
-    if (confirm(`Confirmar esta transação como "${newStatus}"?`)) {
-        database.ref('fluxoDeCaixa/' + id).update({ status: newStatus })
-        .then(() => alert('Transação atualizada!'));
-    }
-}
-
-function generateSalesReport() {
-    const startDate = ui.erp.finance.reportStartDate.value;
-    const endDate = ui.erp.finance.reportEndDate.value;
-    if (!startDate || !endDate) {
-        alert("Por favor, selecione data de início e fim.");
-        return;
-    }
+async function confirmTransaction(accountId, type) {
+    const isReceiving = type === 'receber';
+    const node = isReceiving ? 'contasReceber' : 'contasPagar';
+    const newStatus = isReceiving ? 'Recebido' : 'Paga';
+    const dateField = isReceiving ? 'dataRecebimento' : 'dataPagamento';
+    const confirmationText = isReceiving ? 'Recebimento' : 'Pagamento';
     
-    const start = new Date(startDate).setHours(0,0,0,0);
-    const end = new Date(endDate).setHours(23,59,59,999);
+    const accountRef = database.ref(`${node}/${accountId}`);
+    const snapshot = await accountRef.once('value');
+    const account = snapshot.val();
 
-    database.ref('vendas').orderByChild('data').startAt(new Date(start).toISOString()).endAt(new Date(end).toISOString()).once('value', snapshot => {
-        const sales = snapshot.val() || {};
-        salesReportData = Object.values(sales);
+    if (!account || account.status !== 'Pendente') return;
+    
+    if (confirm(`Confirmar ${confirmationText} de R$ ${account.valor.toFixed(2)}?`)) {
+        try {
+            await accountRef.update({
+                status: newStatus,
+                [dateField]: new Date().toISOString()
+            });
 
-        if (salesReportData.length === 0) {
-            ui.erp.finance.reportResults.innerHTML = "<p>Nenhuma venda encontrada para o período.</p>";
-            ui.erp.finance.exportCsvBtn.classList.add('hidden');
-            return;
+            await database.ref('fluxoDeCaixa').push({
+                descricao: `${confirmationText}: ${account.descricao}`,
+                valor: isReceiving ? account.valor : -account.valor,
+                data: new Date().toISOString()
+            });
+
+            alert(`${confirmationText} confirmado e lançado no caixa!`);
+        } catch (error) {
+            alert(`Erro ao confirmar ${confirmationText}: ` + error.message);
         }
-
-        const tableBody = salesReportData.map(sale => {
-            const items = Object.values(sale.itens).map(i => `${i.quantity}x ${i.nome}`).join('<br>');
-            return `<tr><td>${new Date(sale.data).toLocaleString('pt-BR')}</td><td>${sale.cliente}</td><td>${items}</td><td>R$ ${sale.total.toFixed(2)}</td></tr>`;
-        }).join('');
-
-        ui.erp.finance.reportResults.innerHTML = `
-            <table class="w-full text-sm">
-                <thead><tr><th>Data</th><th>Cliente</th><th>Itens</th><th>Total</th></tr></thead>
-                <tbody>${tableBody}</tbody>
-            </table>`;
-        ui.erp.finance.exportCsvBtn.classList.remove('hidden');
-    });
+    }
 }
 
-function exportToCSV() {
-    if (salesReportData.length === 0) return;
-    let csvContent = "data:text/csv;charset=utf-8,";
-    csvContent += "Data,Cliente,Produto,Quantidade,Preco Unitario,Total Item\r\n";
-    salesReportData.forEach(sale => {
-        const saleDate = new Date(sale.data).toLocaleString('pt-BR');
-        Object.values(sale.itens).forEach(item => {
-            csvContent += [
-                saleDate, `"${sale.cliente}"`, `"${item.nome}"`,
-                item.quantity, item.precoVenda.toFixed(2), (item.quantity * item.precoVenda).toFixed(2)
-            ].join(",") + "\r\n";
-        });
-    });
-    const encodedUri = encodeURI(csvContent);
-    const link = document.createElement("a");
-    link.setAttribute("href", encodedUri);
-    link.setAttribute("download", `relatorio_vendas_${new Date().toISOString().split('T')[0]}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-}
-
-
+// --- OUTRAS FUNÇÕES ---
 function updateLowStockAlerts() {
     if (!ui.erp.dashboard.lowStockAlerts) return;
     const lowStockProducts = Object.values(products).filter(p => p.quantidade <= p.nivelAlertaEstoque);
@@ -1013,14 +1241,46 @@ function calculateDailySalesAndMonthlyRevenue() {
             if (saleDate >= startOfMonth) monthly += sale.total;
             if (saleDate >= startOfDay) daily += sale.total;
         });
-        ui.erp.dashboard.dailySales.textContent = `R$ ${daily.toFixed(2)}`;
-        ui.erp.dashboard.monthlyRevenue.textContent = `R$ ${monthly.toFixed(2)}`;
+        ui.erp.dashboard.dailySales.textContent = `R$ ${daily.toFixed(2).replace('.',',')}`;
+        ui.erp.dashboard.monthlyRevenue.textContent = `R$ ${monthly.toFixed(2).replace('.',',')}`;
     });
+}
+
+function initiateSystemReset() {
+    const password = prompt("Esta é uma ação IRREVERSÍVEL e apagará TODOS os dados (produtos, vendas, clientes, etc). \n\nDigite a senha '9999' para continuar.");
+    if (password === '9999') {
+        if (confirm("TEM CERTEZA ABSOLUTA? Todos os dados serão permanentemente excluídos. Esta ação não pode ser desfeita.")) {
+            performSystemReset();
+        }
+    } else if (password !== null) {
+        alert("Senha incorreta.");
+    }
+}
+
+async function performSystemReset() {
+    const resetData = {
+        '/estoque': null,
+        '/vendas': null,
+        '/pedidos': null,
+        '/clientes': null,
+        '/fornecedores': null,
+        '/compras': null,
+        '/fluxoDeCaixa': null,
+        '/contasReceber': null,
+        '/contasPagar': null,
+    };
+
+    try {
+        await database.ref().update(resetData);
+        alert("Sistema reiniciado com sucesso. A página será recarregada.");
+        location.reload();
+    } catch (error) {
+        alert("Ocorreu um erro ao tentar reiniciar o sistema: " + error.message);
+    }
 }
 
 
 // --- INICIALIZAÇÃO E EVENT LISTENERS ---
-
 function attachEventListeners() {
     // Navegação e Autenticação
     ui.authButton.addEventListener('click', handleAuthClick);
@@ -1028,6 +1288,7 @@ function attachEventListeners() {
     ui.nav.shop.addEventListener('click', (e) => { e.preventDefault(); switchView('public'); });
     ui.nav.dashboard.addEventListener('click', (e) => { e.preventDefault(); switchView('management'); });
     ui.erp.tabs.forEach(button => button.addEventListener('click', () => switchTab(button.dataset.tab)));
+    ui.erp.dashboard.resetSystemButton.addEventListener('click', initiateSystemReset);
 
     // Delegação de Eventos para botões dinâmicos
     document.body.addEventListener('click', e => {
@@ -1046,10 +1307,11 @@ function attachEventListeners() {
         else if (target.classList.contains('delete-customer-button')) deleteCustomer(datasetId);
         else if (target.classList.contains('confirm-receipt-button')) confirmPurchaseReceipt(datasetId);
         else if (target.classList.contains('delete-purchase-button')) deletePurchase(datasetId);
-        else if (target.classList.contains('confirm-sale-button')) confirmSale(datasetId);
+        else if (target.classList.contains('confirm-sale-button')) openPaymentConfirmationModal(datasetId);
         else if (target.classList.contains('cancel-order-button')) cancelOrder(datasetId);
-        else if (target.classList.contains('confirm-finance-button')) confirmFinanceTransaction(datasetId, target.dataset.type);
+        else if (target.classList.contains('confirm-transaction-button')) confirmTransaction(datasetId, target.dataset.type);
         else if (target.classList.contains('remove-purchase-item-button')) removeItemFromPurchase(datasetId);
+        else if (target.classList.contains('remove-sale-item-button')) removeItemFromSale(datasetId);
     });
 
     // Modais
@@ -1061,6 +1323,15 @@ function attachEventListeners() {
     });
     ui.checkout.closeButton.addEventListener('click', () => toggleModal(ui.checkout.modal, false));
     ui.checkout.submitButton.addEventListener('click', submitCheckout);
+    ui.paymentConfirmationModal.closeButton.addEventListener('click', () => toggleModal(ui.paymentConfirmationModal.modal, false));
+    ui.paymentConfirmationModal.processButton.addEventListener('click', processSaleConfirmation);
+    ui.paymentConfirmationModal.paymentMethodSelect.addEventListener('change', toggleInstallmentFields);
+    ui.paymentConfirmationModal.itemsContainer.addEventListener('input', (e) => {
+        if (e.target.classList.contains('item-price-input')) {
+            recalculateSaleTotal('#order-items-to-confirm', '#confirm-sale-new-total');
+        }
+    });
+
 
     // Modais do ERP
     ui.erp.stock.addButton.addEventListener('click', openNewProductModal);
@@ -1080,8 +1351,19 @@ function attachEventListeners() {
     ui.erp.purchases.addItemButton.addEventListener('click', addItemToPurchase);
     ui.erp.purchases.saveButton.addEventListener('click', savePurchase);
     
-    ui.erp.finance.generateReportBtn.addEventListener('click', generateSalesReport);
-    ui.erp.finance.exportCsvBtn.addEventListener('click', exportToCSV);
+    ui.erp.sales.newSaleButton.addEventListener('click', openNewSaleModal);
+    ui.erp.sales.closeManualSaleModal.addEventListener('click', () => toggleModal(ui.erp.sales.manualSaleModal, false));
+    ui.erp.sales.addItemButton.addEventListener('click', addItemToSale);
+    ui.erp.sales.saveManualSaleButton.addEventListener('click', saveManualSale);
+    ui.erp.sales.itemsList.addEventListener('input', (e) => {
+        if (e.target.classList.contains('item-price-input')) {
+            recalculateSaleTotal('#sale-items-list', '#sale-total');
+        }
+    });
+    
+    ui.erp.finance.newExpenseButton.addEventListener('click', openNewExpenseModal);
+    ui.expenseModal.closeButton.addEventListener('click', () => toggleModal(ui.expenseModal.modal, false));
+    ui.expenseModal.saveButton.addEventListener('click', saveExpense);
 }
 
 document.addEventListener('DOMContentLoaded', () => {
