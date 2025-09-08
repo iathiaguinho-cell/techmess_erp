@@ -14,7 +14,7 @@ button:hover {
 }
 
 /* Form input styles */
-.form-input {
+.form-input, textarea.form-input {
     background-color: #374151; /* bg-gray-700 */
     color: white;
     border: 1px solid #4b5563; /* border-gray-600 */
@@ -22,7 +22,7 @@ button:hover {
     padding: 0.75rem;
     width: 100%;
 }
-.form-input:focus {
+.form-input:focus, textarea.form-input:focus {
     outline: none;
     border-color: #06b6d4; /* border-cyan-500 */
     box-shadow: 0 0 0 2px #06b6d4;
