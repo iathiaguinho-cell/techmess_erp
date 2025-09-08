@@ -3,6 +3,7 @@
  * Senior Software Developer: Parceiro de Programacao
  * Description: Core logic for the Techmess ERP & E-commerce SPA.
  * Handles Firebase integration, UI manipulation, and business logic for all modules.
+ * VERSION 2.0 - With unique identifiers and price editing.
  */
 
 // --- CONFIGURAÇÃO E INICIALIZAÇÃO ---
@@ -28,12 +29,13 @@ const database = firebase.database();
 
 // --- VARIÁVEIS GLOBAIS DE ESTADO ---
 let cart = {};
-let products = {};
+let products = {}; // Agora armazena modelos de produtos
 let suppliers = {};
 let customers = {};
-let currentPurchaseItems = {};
-let currentSaleItems = {};
+let currentPurchaseItems = []; // Alterado para array para suportar múltiplos identificadores por item
+let currentSaleItems = []; // Alterado para array
 let currentOrderToConfirm = null;
+let salesHistory = {}; // Cache para o histórico de vendas para filtragem
 
 // --- SELETORES DE ELEMENTOS DO DOM (CACHE) ---
 const getElem = (id) => document.getElementById(id);
@@ -72,12 +74,13 @@ const ui = {
         modal: getElem('payment-confirmation-modal'),
         closeButton: getElem('close-payment-confirmation-modal'),
         processButton: getElem('process-sale-confirmation-button'),
+        orderIdInput: getElem('confirm-sale-order-id'),
         paymentMethodSelect: getElem('confirm-sale-payment-method'),
         installmentFields: getElem('installment-fields'),
         installmentsInput: getElem('confirm-sale-installments'),
         firstDueDateInput: getElem('confirm-sale-first-due-date'),
         itemsContainer: getElem('order-items-to-confirm'),
-        newTotalSpan: getElem('confirm-sale-new-total'),
+        total: getElem('confirm-sale-total')
     },
     expenseModal: {
         modal: getElem('expense-form-modal'),
@@ -107,11 +110,17 @@ const ui = {
             closeManualSaleModal: getElem('close-manual-sale-modal'),
             saveManualSaleButton: getElem('save-manual-sale-button'),
             customerSelect: getElem('sale-customer'),
-            productSelect: getElem('sale-product'),
-            quantityInput: getElem('sale-quantity'),
+            productModelSelect: getElem('sale-product-model'),
+            productIdentifierSelect: getElem('sale-product-identifier'),
+            priceInput: getElem('sale-price'),
             addItemButton: getElem('add-item-to-sale-button'),
             itemsList: getElem('sale-items-list'),
-            total: getElem('sale-total')
+            total: getElem('sale-total'),
+            dateInput: getElem('sale-date'),
+            paymentMethodSelect: getElem('sale-payment-method'),
+            historyFilterProduct: getElem('sales-history-filter-product'),
+            historyFilterIdentifier: getElem('sales-history-filter-identifier'),
+            applyHistoryFilterButton: getElem('apply-sales-history-filter'),
         },
         customers: {
             content: getElem('customers-content'),
@@ -136,8 +145,8 @@ const ui = {
             saveButton: getElem('save-purchase-button'),
             supplierSelect: getElem('purchase-supplier'),
             productSelect: getElem('purchase-product'),
-            quantityInput: getElem('purchase-quantity'),
             priceInput: getElem('purchase-unit-price'),
+            identifiersTextarea: getElem('purchase-identifiers'),
             addItemButton: getElem('add-item-to-purchase-button'),
             itemsList: getElem('purchase-items-list'),
             total: getElem('purchase-total'),
@@ -147,19 +156,20 @@ const ui = {
         },
         stock: {
             content: getElem('stock-content'),
-            addButton: getElem('add-product-button'),
+            addModelButton: getElem('add-product-model-button'),
             list: getElem('product-management-list'),
-            modal: getElem('product-form-modal'),
-            closeModalButton: getElem('close-product-form-modal'),
-            saveButton: getElem('save-product-button'),
-            title: getElem('product-form-title'),
-            idInput: getElem('product-id'),
-            nameInput: getElem('product-name'),
-            priceInput: getElem('product-price'),
-            quantityInput: getElem('product-quantity'),
-            descriptionInput: getElem('product-description'),
-            alertLevelInput: getElem('product-alert-level'),
-            imageUploadInput: getElem('product-image-upload')
+            modal: getElem('product-model-form-modal'),
+            closeModalButton: getElem('close-product-model-form-modal'),
+            saveButton: getElem('save-product-model-button'),
+            title: getElem('product-model-form-title'),
+            idInput: getElem('product-model-id'),
+            nameInput: getElem('product-model-name'),
+            priceInput: getElem('product-model-price'),
+            descriptionInput: getElem('product-model-description'),
+            alertLevelInput: getElem('product-model-alert-level'),
+            imageUploadInput: getElem('product-model-image-upload'),
+            filterProduct: getElem('stock-filter-product'),
+            filterIdentifier: getElem('stock-filter-identifier'),
         },
         finance: {
             content: getElem('finance-content'),
@@ -223,7 +233,6 @@ auth.onAuthStateChanged(user => {
     
     if (isLoggedIn) {
         switchView('management');
-        console.log("Usuário autenticado. Carregando/sincronizando dados do painel...");
         loadStockManagement(); 
         loadSupplierManagement();
         loadCustomerManagement();
@@ -257,18 +266,20 @@ function loadPublicProducts() {
         const productEntries = Object.entries(products);
         ui.shop.productList.innerHTML = productEntries.length === 0 
             ? '<p class="col-span-full text-center">Nenhum produto disponível no momento.</p>'
-            : productEntries.map(([id, p]) => `
+            : productEntries.map(([id, p]) => {
+                const availableUnits = p.unidades ? Object.values(p.unidades).filter(u => u.status === 'disponivel').length : 0;
+                return `
                 <div class="product-card">
                     <img src="${p.imagem || 'https://placehold.co/300x200/1f2937/9ca3af?text=Produto'}" alt="${p.nome}">
                     <h3>${p.nome}</h3>
                     <p>${p.descricao || 'Sem descrição.'}</p>
                     <p class="price">R$ ${(p.precoVenda || 0).toFixed(2).replace('.', ',')}</p>
-                    ${(p.quantidade || 0) > 0
+                    ${availableUnits > 0
                         ? `<button class="add-to-cart-button w-full bg-cyan-600 hover:bg-cyan-700 text-white font-bold py-2 px-4 rounded" data-id="${id}">Adicionar ao Carrinho</button>`
                         : `<p class="out-of-stock">Esgotado</p>`
                     }
-                </div>
-            `).join('');
+                </div>`;
+            }).join('');
     });
 }
 
@@ -276,7 +287,7 @@ function addToCart(productId) {
     if (cart[productId]) {
         cart[productId].quantity++;
     } else {
-        cart[productId] = { ...products[productId], quantity: 1 };
+        cart[productId] = { ...products[productId], quantity: 1, id: productId };
     }
     updateCartDisplay();
 }
@@ -457,122 +468,147 @@ function openNewSaleModal() {
     }
     
     const customerOptions = Object.entries(customers).map(([id, c]) => `<option value="${id}">${c.nome}</option>`).join('');
-    ui.erp.sales.customerSelect.innerHTML = customerOptions;
+    ui.erp.sales.customerSelect.innerHTML = `<option value="">Selecione um Cliente</option>${customerOptions}`;
 
-    const productOptions = Object.entries(products).map(([id, p]) => `<option value="${id}">${p.nome} - R$ ${p.precoVenda.toFixed(2)}</option>`).join('');
-    ui.erp.sales.productSelect.innerHTML = productOptions;
+    const productModelOptions = Object.entries(products)
+        .filter(([id, p]) => p.unidades && Object.values(p.unidades).some(u => u.status === 'disponivel'))
+        .map(([id, p]) => `<option value="${id}">${p.nome}</option>`).join('');
+    ui.erp.sales.productModelSelect.innerHTML = `<option value="">Selecione um Modelo</option>${productModelOptions}`;
 
+    ui.erp.sales.productIdentifierSelect.innerHTML = '';
+    ui.erp.sales.priceInput.value = '';
     ui.erp.sales.dateInput.value = new Date().toISOString().split('T')[0];
-    currentSaleItems = {};
+    
+    currentSaleItems = [];
     updateSaleItemsList();
     toggleModal(ui.erp.sales.manualSaleModal, true);
 }
 
-function addItemToSale() {
-    const productId = ui.erp.sales.productSelect.value;
-    const quantity = parseInt(ui.erp.sales.quantityInput.value);
-    const product = products[productId];
+function populateSaleIdentifiers() {
+    const modelId = ui.erp.sales.productModelSelect.value;
+    const identifierSelect = ui.erp.sales.productIdentifierSelect;
+    const priceInput = ui.erp.sales.priceInput;
 
-    if (!productId || isNaN(quantity) || quantity <= 0) {
-        alert("Dados do item inválidos.");
+    identifierSelect.innerHTML = '<option value="">Carregando...</option>';
+    priceInput.value = '';
+
+    if (!modelId) {
+        identifierSelect.innerHTML = '';
         return;
     }
+
+    const product = products[modelId];
+    const availableUnits = product.unidades ? Object.keys(product.unidades).filter(id => product.unidades[id].status === 'disponivel') : [];
     
-    if (product.quantidade < quantity) {
-        alert(`Estoque insuficiente para ${product.nome}. Apenas ${product.quantidade} unidades disponíveis.`);
+    const alreadyAdded = currentSaleItems.map(item => item.identifier);
+    const options = availableUnits
+        .filter(id => !alreadyAdded.includes(id))
+        .map(id => `<option value="${id}">${id}</option>`).join('');
+
+    identifierSelect.innerHTML = options ? `<option value="">Selecione</option>${options}` : '<option value="">Sem unidades</option>';
+    priceInput.value = product.precoVenda.toFixed(2);
+}
+
+function addItemToSale() {
+    const modelId = ui.erp.sales.productModelSelect.value;
+    const identifier = ui.erp.sales.productIdentifierSelect.value;
+    const price = parseFloat(ui.erp.sales.priceInput.value);
+
+    if (!modelId || !identifier || isNaN(price) || price < 0) {
+        alert("Selecione modelo, identificador e defina um preço válido.");
         return;
     }
 
-    currentSaleItems[productId] = { 
-        ...product,
-        quantity: (currentSaleItems[productId]?.quantity || 0) + quantity 
-    };
+    currentSaleItems.push({
+        modelId: modelId,
+        identifier: identifier,
+        price: price,
+        nome: products[modelId].nome,
+        imagem: products[modelId].imagem
+    });
     updateSaleItemsList();
+    populateSaleIdentifiers(); // Atualiza a lista de identificadores disponíveis
 }
 
 function updateSaleItemsList() {
     let total = 0;
-    ui.erp.sales.itemsList.innerHTML = Object.entries(currentSaleItems).map(([id, item]) => {
-        total += item.quantity * item.precoVenda;
-        return `
-            <div class="sale-item-row flex justify-between items-center p-2 bg-gray-700 rounded mb-1" data-id="${id}" data-quantity="${item.quantity}">
-                <span>${item.quantity}x ${item.nome}</span>
-                <div class="flex items-center gap-2">
-                    <span>R$</span>
-                    <input type="number" value="${item.precoVenda.toFixed(2)}" class="item-price-input form-input w-32 text-right" step="0.01">
-                    <button class="text-red-400 hover:text-red-600 remove-sale-item-button" data-id="${id}">&times;</button>
-                </div>
-            </div>
-        `;
+    ui.erp.sales.itemsList.innerHTML = currentSaleItems.map((item, index) => {
+        total += item.price;
+        return `<div class="flex justify-between items-center p-2 bg-gray-700 rounded mb-1">
+                    <span>${item.nome} (S/N: ${item.identifier}) - R$ ${item.price.toFixed(2)}</span>
+                    <button class="text-red-400 hover:text-red-600 remove-sale-item-button" data-index="${index}">&times;</button>
+                </div>`;
     }).join('');
-    
-    recalculateSaleTotal('#sale-items-list', '#sale-total');
+    ui.erp.sales.total.textContent = `R$ ${total.toFixed(2)}`;
 }
 
-function removeItemFromSale(productId) {
-    delete currentSaleItems[productId];
+function removeItemFromSale(itemIndex) {
+    currentSaleItems.splice(itemIndex, 1);
     updateSaleItemsList();
+    populateSaleIdentifiers();
 }
 
 async function saveManualSale() {
     const customerId = ui.erp.sales.customerSelect.value;
     const saleDate = ui.erp.sales.dateInput.value;
+    const paymentMethod = ui.erp.sales.paymentMethodSelect.value;
     const customer = customers[customerId];
 
-    if (!customerId || !saleDate || Object.keys(currentSaleItems).length === 0) {
+    if (!customerId || !saleDate || currentSaleItems.length === 0) {
         alert("Preencha todos os campos da venda (cliente, data) e adicione itens.");
         return;
     }
 
-    const finalItems = {};
-    let finalTotal = 0;
-    document.querySelectorAll('#sale-items-list .sale-item-row').forEach(row => {
-        const id = row.dataset.id;
-        const quantity = parseInt(row.dataset.quantity);
-        const finalPrice = parseFloat(row.querySelector('.item-price-input').value);
-        
-        finalItems[id] = {
-            ...currentSaleItems[id],
-            precoVenda: finalPrice,
-            quantity: quantity,
-        };
-        finalTotal += quantity * finalPrice;
-    });
+    const total = currentSaleItems.reduce((sum, item) => sum + item.price, 0);
 
     const updates = {};
-    for (const [itemId, item] of Object.entries(finalItems)) {
-        updates[`/estoque/${itemId}/quantidade`] = firebase.database.ServerValue.increment(-item.quantity);
+    const saleItemsForDB = {};
+    for (const item of currentSaleItems) {
+        updates[`/estoque/${item.modelId}/unidades/${item.identifier}/status`] = 'vendido';
+        saleItemsForDB[item.identifier] = {
+            modelId: item.modelId,
+            nome: item.nome,
+            imagem: item.imagem,
+            precoVenda: item.price,
+            identifier: item.identifier
+        };
     }
-    await database.ref().update(updates);
     
-    const saleData = {
-        clienteId: customerId,
-        cliente: customer.nome,
-        whatsapp: customer.whatsapp,
-        itens: finalItems,
-        total: finalTotal,
-        data: new Date(saleDate + 'T12:00:00Z').toISOString(),
-        status: 'Concluída',
-        pagamento: {
-            metodo: 'A definir',
-            status: 'Pendente'
-        }
-    };
-    const newSaleRef = await database.ref('vendas').push(saleData);
+    try {
+        await database.ref().update(updates);
+        
+        const saleData = {
+            clienteId: customerId,
+            cliente: customer.nome,
+            whatsapp: customer.whatsapp,
+            itens: saleItemsForDB,
+            total: total,
+            data: new Date(saleDate + 'T12:00:00Z').toISOString(),
+            status: 'Concluída',
+            pagamento: {
+                metodo: paymentMethod,
+                status: 'Pendente' // Manual sales might need confirmation or direct entry
+            }
+        };
+        const newSaleRef = await database.ref('vendas').push(saleData);
 
-    await database.ref('contasReceber').push({
-        vendaId: newSaleRef.key,
-        clienteId: customerId,
-        clienteNome: customer.nome,
-        descricao: `Venda Manual #${newSaleRef.key.slice(-5)}`,
-        valor: finalTotal,
-        dataVencimento: saleData.data.split('T')[0],
-        status: 'Pendente'
-    });
-    
-    alert("Venda manual gerada com sucesso!");
-    toggleModal(ui.erp.sales.manualSaleModal, false);
+        await database.ref('contasReceber').push({
+            vendaId: newSaleRef.key,
+            clienteId: customerId,
+            clienteNome: customer.nome,
+            descricao: `Venda Manual #${newSaleRef.key.slice(-5)}`,
+            valor: total,
+            dataVencimento: saleDate,
+            status: 'Pendente'
+        });
+        
+        alert("Venda manual gerada com sucesso!");
+        toggleModal(ui.erp.sales.manualSaleModal, false);
+    } catch(error) {
+        alert('Erro ao salvar venda: ' + error.message);
+    }
 }
+
 
 function loadSales() {
     database.ref('pedidos').orderByChild('status').equalTo('pendente').on('value', snapshot => {
@@ -603,51 +639,109 @@ function loadSales() {
 }
 
 function loadSalesHistory() {
-    database.ref('vendas').limitToLast(25).on('value', snapshot => {
-        const sales = snapshot.val() || {};
-        const reversedSales = Object.entries(sales).reverse();
-
-        if (reversedSales.length === 0) {
-            ui.erp.sales.historyList.innerHTML = '<p>Nenhuma venda foi confirmada ainda.</p>';
-            return;
-        }
-
-        const tableBody = reversedSales.map(([id, sale]) => {
-            const itemsList = Object.values(sale.itens).map(item => `${item.nome} (${item.quantity})`).join(', ');
-            return `
-                <tr>
-                    <td>${new Date(sale.data).toLocaleDateString()}</td>
-                    <td>${sale.cliente}</td>
-                    <td>${sale.pagamento.metodo} (${sale.pagamento.parcelas || 1}x)</td>
-                    <td class="text-xs">${itemsList}</td>
-                    <td>R$ ${sale.total.toFixed(2).replace('.',',')}</td>
-                </tr>`;
-        }).join('');
-        
-        ui.erp.sales.historyList.innerHTML = `
-            <table class="w-full text-sm">
-                <thead><tr><th>Data</th><th>Cliente</th><th>Pagamento</th><th>Itens</th><th>Total</th></tr></thead>
-                <tbody>${tableBody}</tbody>
-            </table>`;
+    database.ref('vendas').limitToLast(100).on('value', snapshot => {
+        salesHistory = snapshot.val() || {};
+        renderSalesHistory(salesHistory);
     });
+}
+
+function applySalesHistoryFilter() {
+    const productFilter = ui.erp.sales.historyFilterProduct.value.toLowerCase().trim();
+    const identifierFilter = ui.erp.sales.historyFilterIdentifier.value.toLowerCase().trim();
+
+    if (!productFilter && !identifierFilter) {
+        renderSalesHistory(salesHistory);
+        return;
+    }
+
+    const filteredSales = {};
+    for (const saleId in salesHistory) {
+        const sale = salesHistory[saleId];
+        let match = false;
+        for (const itemId in sale.itens) {
+            const item = sale.itens[itemId];
+            const nameMatch = productFilter && item.nome.toLowerCase().includes(productFilter);
+            const identifierMatch = identifierFilter && item.identifier.toLowerCase().includes(identifierFilter);
+            if ((productFilter && identifierFilter && nameMatch && identifierMatch) || 
+                (productFilter && !identifierFilter && nameMatch) ||
+                (!productFilter && identifierFilter && identifierMatch)) {
+                match = true;
+                break;
+            }
+        }
+        if (match) {
+            filteredSales[saleId] = sale;
+        }
+    }
+    renderSalesHistory(filteredSales);
+}
+
+function renderSalesHistory(salesData) {
+    const reversedSales = Object.entries(salesData).reverse();
+
+    if (reversedSales.length === 0) {
+        ui.erp.sales.historyList.innerHTML = '<p>Nenhuma venda encontrada com os filtros atuais.</p>';
+        return;
+    }
+
+    const tableBody = reversedSales.map(([id, sale]) => {
+        const itemsList = Object.values(sale.itens).map(item => 
+            `<div>${item.nome} (S/N: ${item.identifier}) - R$ ${item.precoVenda.toFixed(2)}</div>`
+        ).join('');
+        return `
+            <tr>
+                <td>${new Date(sale.data).toLocaleDateString()}</td>
+                <td>${sale.cliente}</td>
+                <td>${sale.pagamento?.metodo || 'N/A'} (${sale.pagamento?.parcelas || 1}x)</td>
+                <td class="text-xs">${itemsList}</td>
+                <td>R$ ${sale.total.toFixed(2).replace('.',',')}</td>
+            </tr>`;
+    }).join('');
+    
+    ui.erp.sales.historyList.innerHTML = `
+        <table class="w-full text-sm">
+            <thead><tr><th>Data</th><th>Cliente</th><th>Pagamento</th><th>Itens</th><th>Total</th></tr></thead>
+            <tbody>${tableBody}</tbody>
+        </table>`;
 }
 
 function openPaymentConfirmationModal(orderId) {
     currentOrderToConfirm = { id: orderId, ...window.pendingOrdersData[orderId] };
     const order = currentOrderToConfirm;
-
-    ui.paymentConfirmationModal.itemsContainer.innerHTML = Object.entries(order.itens).map(([id, item]) => `
-        <div class="sale-item-row flex justify-between items-center p-2 bg-gray-700 rounded mb-1" data-id="${id}" data-quantity="${item.quantity}">
-            <span>${item.quantity}x ${item.nome}</span>
-            <div class="flex items-center gap-2">
-                <span>R$</span>
-                <input type="number" value="${item.precoVenda.toFixed(2)}" class="item-price-input form-input w-32 text-right" step="0.01">
-            </div>
-        </div>
-    `).join('');
-
-    recalculateSaleTotal('#order-items-to-confirm', '#confirm-sale-new-total');
     
+    ui.paymentConfirmationModal.itemsContainer.innerHTML = '';
+    
+    let itemIndex = 0;
+    for (const modelId in order.itens) {
+        const item = order.itens[modelId];
+        for (let i = 0; i < item.quantity; i++) {
+            const product = products[item.id];
+            const availableUnits = product.unidades ? Object.keys(product.unidades).filter(id => product.unidades[id].status === 'disponivel') : [];
+            const options = availableUnits.map(uid => `<option value="${uid}">${uid}</option>`).join('');
+
+            const itemHtml = `
+                <div class="p-3 bg-gray-700 rounded" data-item-index="${itemIndex}">
+                    <p class="font-semibold">${item.nome} (#${i+1})</p>
+                    <div class="grid grid-cols-2 gap-4 mt-2">
+                        <div>
+                            <label class="block text-xs mb-1">Identificador (S/N)</label>
+                            <select class="form-input w-full confirm-item-identifier" data-model-id="${item.id}">
+                                <option value="">Selecione...</option>
+                                ${options}
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-xs mb-1">Preço Final (R$)</label>
+                            <input type="number" step="0.01" class="form-input w-full confirm-item-price" value="${item.precoVenda.toFixed(2)}">
+                        </div>
+                    </div>
+                </div>`;
+            ui.paymentConfirmationModal.itemsContainer.innerHTML += itemHtml;
+            itemIndex++;
+        }
+    }
+
+    updateConfirmationTotal();
     const today = new Date().toISOString().split('T')[0];
     ui.paymentConfirmationModal.firstDueDateInput.value = today;
     ui.paymentConfirmationModal.installmentsInput.value = 1;
@@ -655,6 +749,16 @@ function openPaymentConfirmationModal(orderId) {
     toggleInstallmentFields();
     toggleModal(ui.paymentConfirmationModal.modal, true);
 }
+
+
+function updateConfirmationTotal() {
+    let total = 0;
+    querySelAll('.confirm-item-price').forEach(input => {
+        total += parseFloat(input.value) || 0;
+    });
+    ui.paymentConfirmationModal.total.textContent = `R$ ${total.toFixed(2)}`;
+}
+
 
 function toggleInstallmentFields() {
     const method = ui.paymentConfirmationModal.paymentMethodSelect.value;
@@ -671,6 +775,39 @@ async function processSaleConfirmation() {
     const orderId = currentOrderToConfirm.id;
     const order = currentOrderToConfirm;
     
+    const itemElements = querySelAll('#order-items-to-confirm > div');
+    const finalItems = {};
+    const updates = {};
+    let total = 0;
+
+    for (const el of itemElements) {
+        const identifierSelect = el.querySelector('.confirm-item-identifier');
+        const priceInput = el.querySelector('.confirm-item-price');
+        
+        const identifier = identifierSelect.value;
+        const modelId = identifierSelect.dataset.modelId;
+        const price = parseFloat(priceInput.value);
+
+        if (!identifier || isNaN(price) || price < 0) {
+            alert(`Todos os itens devem ter um identificador selecionado e um preço válido.`);
+            return;
+        }
+        if (updates[`/estoque/${modelId}/unidades/${identifier}/status`]) {
+            alert(`O identificador "${identifier}" foi selecionado mais de uma vez. Por favor, escolha identificadores únicos para cada item.`);
+            return;
+        }
+
+        updates[`/estoque/${modelId}/unidades/${identifier}/status`] = 'vendido';
+        finalItems[identifier] = {
+            modelId: modelId,
+            identifier: identifier,
+            nome: products[modelId].nome,
+            imagem: products[modelId].imagem,
+            precoVenda: price
+        };
+        total += price;
+    }
+
     const paymentMethod = ui.paymentConfirmationModal.paymentMethodSelect.value;
     const installments = parseInt(ui.paymentConfirmationModal.installmentsInput.value) || 1;
     const firstDueDate = ui.paymentConfirmationModal.firstDueDateInput.value;
@@ -679,40 +816,17 @@ async function processSaleConfirmation() {
         alert("Para esta forma de pagamento, a data do primeiro vencimento é obrigatória.");
         return;
     }
-    
-    const finalItems = {};
-    let finalTotal = 0;
-    document.querySelectorAll('#order-items-to-confirm .sale-item-row').forEach(row => {
-        const id = row.dataset.id;
-        const originalItem = order.itens[id];
-        const finalPrice = parseFloat(row.querySelector('.item-price-input').value);
-        
-        finalItems[id] = { ...originalItem, precoVenda: finalPrice };
-        finalTotal += originalItem.quantity * finalPrice;
-    });
-
-
-    const updates = {};
-    let hasEnoughStock = true;
-    for (const [itemId, item] of Object.entries(finalItems)) {
-        const product = products[itemId];
-        if (!product || product.quantidade < item.quantity) {
-            hasEnoughStock = false;
-            alert(`Estoque insuficiente para ${item.nome}. Venda não confirmada.`);
-            break;
-        }
-        updates[`/estoque/${itemId}/quantidade`] = firebase.database.ServerValue.increment(-item.quantity);
-    }
-
-    if (!hasEnoughStock) return;
 
     try {
         await database.ref().update(updates);
 
         const saleData = {
-            ...order,
+            clienteId: order.clienteId,
+            cliente: order.cliente,
+            whatsapp: order.whatsapp,
             itens: finalItems,
-            total: finalTotal,
+            total: total,
+            data: new Date().toISOString(),
             status: 'Concluída',
             pagamento: {
                 metodo: paymentMethod,
@@ -720,16 +834,15 @@ async function processSaleConfirmation() {
                 status: 'A Receber'
             }
         };
-        delete saleData.id;
         
         const newSaleRef = await database.ref('vendas').push(saleData);
         
-        const installmentValue = finalTotal / installments;
+        const installmentValue = total / installments;
         for (let i = 1; i <= installments; i++) {
             const dueDate = new Date(firstDueDate + 'T12:00:00Z');
             dueDate.setMonth(dueDate.getMonth() + (i - 1));
 
-            const installmentData = {
+            await database.ref('contasReceber').push({
                 vendaId: newSaleRef.key,
                 clienteId: order.clienteId,
                 clienteNome: order.cliente,
@@ -737,8 +850,7 @@ async function processSaleConfirmation() {
                 valor: installmentValue,
                 dataVencimento: dueDate.toISOString().split('T')[0],
                 status: 'Pendente'
-            };
-            await database.ref('contasReceber').push(installmentData);
+            });
         }
 
         await database.ref('pedidos/' + orderId).remove();
@@ -752,38 +864,24 @@ async function processSaleConfirmation() {
     }
 }
 
+
 function cancelOrder(orderId) {
     if (confirm('Tem a certeza de que deseja cancelar este pedido?')) {
         database.ref('pedidos/' + orderId).remove().then(() => alert('Pedido cancelado!'));
     }
 }
 
-function recalculateSaleTotal(containerSelector, totalSelector) {
-    let total = 0;
-    const items = document.querySelectorAll(`${containerSelector} .sale-item-row`);
-    items.forEach(itemRow => {
-        const quantity = parseFloat(itemRow.dataset.quantity);
-        const priceInput = itemRow.querySelector('.item-price-input');
-        const price = parseFloat(priceInput.value);
-        if (!isNaN(quantity) && !isNaN(price)) {
-            total += quantity * price;
-        }
-    });
-    document.querySelector(totalSelector).textContent = `R$ ${total.toFixed(2).replace('.',',')}`;
-}
-
 // --- MÓDULO: ESTOQUE (ERP) ---
-async function saveProduct() {
+async function saveProductModel() {
     const id = ui.erp.stock.idInput.value;
     const name = ui.erp.stock.nameInput.value;
     const price = parseFloat(ui.erp.stock.priceInput.value);
-    const quantity = parseInt(ui.erp.stock.quantityInput.value);
     const description = ui.erp.stock.descriptionInput.value;
     const alertLevel = parseInt(ui.erp.stock.alertLevelInput.value);
     const imageFile = ui.erp.stock.imageUploadInput.files[0];
 
-    if (!name || isNaN(price) || isNaN(quantity)) {
-        alert('Por favor, preencha nome, preço e quantidade corretamente.');
+    if (!name || isNaN(price)) {
+        alert('Por favor, preencha nome e preço corretamente.');
         return;
     }
 
@@ -811,54 +909,122 @@ async function saveProduct() {
         nome: name,
         nome_lowercase: name.toLowerCase(),
         precoVenda: price,
-        quantidade: quantity,
         descricao: description,
         nivelAlertaEstoque: alertLevel || 0,
         imagem: imageUrl
     };
 
     const dbRef = id ? database.ref('estoque/' + id) : database.ref('estoque').push();
-    dbRef.set(productData).then(() => {
-        alert(`Produto ${id ? 'atualizado' : 'adicionado'} com sucesso!`);
-        toggleModal(ui.erp.stock.modal, false);
-    }).catch(error => alert(`Erro ao salvar produto: ${error.message}`));
+    
+    // Se for um produto existente, não sobrescrever as unidades
+    if(id) {
+         dbRef.update(productData).then(() => {
+            alert(`Modelo de produto atualizado com sucesso!`);
+            toggleModal(ui.erp.stock.modal, false);
+        }).catch(error => alert(`Erro ao salvar modelo: ${error.message}`));
+    } else {
+         dbRef.set(productData).then(() => {
+            alert(`Modelo de produto adicionado com sucesso!`);
+            toggleModal(ui.erp.stock.modal, false);
+        }).catch(error => alert(`Erro ao salvar modelo: ${error.message}`));
+    }
 }
 
 function loadStockManagement() {
     database.ref('estoque').on('value', snapshot => {
         products = snapshot.val() || {};
-        const tableBody = Object.entries(products).map(([id, p]) => `
-            <tr>
-                <td><img src="${p.imagem || 'https://placehold.co/50x50/374151/9ca3af?text=Img'}" alt="${p.nome}" class="w-12 h-12 object-cover rounded"></td>
-                <td>${p.nome}</td>
-                <td>R$ ${(p.precoVenda || 0).toFixed(2).replace('.', ',')}</td>
-                <td>${p.quantidade || 0}</td>
-                <td>${p.nivelAlertaEstoque || 0}</td>
-                <td>
-                    <button class="edit-product-button bg-blue-600 hover:bg-blue-700 text-white text-xs px-2 py-1 rounded" data-id="${id}">Editar</button>
-                    <button class="delete-product-button bg-red-600 hover:bg-red-700 text-white text-xs px-2 py-1 rounded ml-2" data-id="${id}">Excluir</button>
-                </td>
-            </tr>
-        `).join('');
-        
-        ui.erp.stock.list.innerHTML = `
-            <table class="w-full text-sm">
-                <thead><tr><th>Imagem</th><th>Nome</th><th>Preço Venda</th><th>Qtd.</th><th>Alerta</th><th>Ações</th></tr></thead>
-                <tbody>${tableBody}</tbody>
-            </table>
-        `;
+        renderStockTable(products);
         updateLowStockAlerts();
     });
 }
 
-function openEditProductModal(productId) {
-    const p = products[productId];
+function renderStockTable(data) {
+    const productModels = Object.entries(data);
+    let tableBody = '';
+
+    if (productModels.length === 0) {
+        tableBody = '<tr><td colspan="5" class="text-center">Nenhum modelo de produto cadastrado.</td></tr>';
+    } else {
+        productModels.forEach(([id, p]) => {
+            const units = p.unidades || {};
+            const availableUnits = Object.entries(units).filter(([uid, u]) => u.status === 'disponivel');
+            const soldUnits = Object.entries(units).filter(([uid, u]) => u.status === 'vendido');
+            const availableCount = availableUnits.length;
+            
+            tableBody += `
+                <tr class="bg-gray-800 border-b border-gray-900 align-top">
+                    <td><img src="${p.imagem || 'https://placehold.co/50x50/374151/9ca3af?text=Img'}" alt="${p.nome}" class="w-12 h-12 object-cover rounded"></td>
+                    <td>
+                        <div class="font-bold text-lg">${p.nome}</div>
+                        <div class="text-xs text-gray-400 mt-2">
+                            <b>Disponíveis:</b> ${availableUnits.map(([uid]) => `<span class="bg-gray-600 px-2 py-1 rounded text-xs inline-block mr-1 mb-1">${uid}</span>`).join('') || 'Nenhuma'}
+                        </div>
+                         <div class="text-xs text-gray-400 mt-2">
+                            <b>Vendidos:</b> ${soldUnits.map(([uid]) => `<span class="bg-red-900 px-2 py-1 rounded text-xs inline-block mr-1 mb-1">${uid}</span>`).join('') || 'Nenhum'}
+                        </div>
+                    </td>
+                    <td>R$ ${(p.precoVenda || 0).toFixed(2).replace('.', ',')}</td>
+                    <td class="font-bold text-xl ${availableCount <= (p.nivelAlertaEstoque || 0) ? 'text-red-400' : 'text-green-400'}">${availableCount}</td>
+                    <td>
+                        <button class="edit-product-model-button bg-blue-600 text-white text-xs px-2 py-1 rounded" data-id="${id}">Editar Modelo</button>
+                        <button class="add-stock-unit-button bg-green-600 text-white text-xs px-2 py-1 rounded mt-1" data-id="${id}">Adicionar Unidade</button>
+                        <button class="delete-product-model-button bg-red-600 text-white text-xs px-2 py-1 rounded mt-1" data-id="${id}">Excluir Modelo</button>
+                    </td>
+                </tr>`;
+        });
+    }
+
+    ui.erp.stock.list.innerHTML = `
+        <table class="w-full text-sm">
+            <thead><tr><th>Imagem</th><th>Modelo e Unidades</th><th>Preço Padrão</th><th>Qtd. Disp.</th><th>Ações</th></tr></thead>
+            <tbody>${tableBody}</tbody>
+        </table>
+    `;
+}
+
+function applyStockFilter() {
+    const productFilter = ui.erp.stock.filterProduct.value.toLowerCase().trim();
+    const identifierFilter = ui.erp.stock.filterIdentifier.value.toLowerCase().trim();
+
+    if (!productFilter && !identifierFilter) {
+        renderStockTable(products);
+        return;
+    }
+
+    const filteredProducts = {};
+    for (const modelId in products) {
+        const product = products[modelId];
+        const productNameMatch = product.nome.toLowerCase().includes(productFilter);
+        
+        const matchingUnits = {};
+        let hasMatchingUnit = false;
+        if (product.unidades) {
+            for (const unitId in product.unidades) {
+                if (unitId.toLowerCase().includes(identifierFilter)) {
+                    matchingUnits[unitId] = product.unidades[unitId];
+                    hasMatchingUnit = true;
+                }
+            }
+        }
+
+        if (productNameMatch && (!identifierFilter || hasMatchingUnit)) {
+            filteredProducts[modelId] = { ...product };
+            if (identifierFilter) {
+                filteredProducts[modelId].unidades = matchingUnits;
+            }
+        }
+    }
+    renderStockTable(filteredProducts);
+}
+
+
+function openEditProductModelModal(modelId) {
+    const p = products[modelId];
     if (p) {
-        ui.erp.stock.title.textContent = 'Editar Produto';
-        ui.erp.stock.idInput.value = productId;
+        ui.erp.stock.title.textContent = 'Editar Modelo de Produto';
+        ui.erp.stock.idInput.value = modelId;
         ui.erp.stock.nameInput.value = p.nome;
         ui.erp.stock.priceInput.value = p.precoVenda;
-        ui.erp.stock.quantityInput.value = p.quantidade;
         ui.erp.stock.descriptionInput.value = p.descricao;
         ui.erp.stock.alertLevelInput.value = p.nivelAlertaEstoque;
         ui.erp.stock.imageUploadInput.value = '';
@@ -866,23 +1032,39 @@ function openEditProductModal(productId) {
     }
 }
 
-function openNewProductModal() {
-    ui.erp.stock.title.textContent = 'Adicionar Produto';
+function openNewProductModelModal() {
+    ui.erp.stock.title.textContent = 'Adicionar Modelo de Produto';
     ui.erp.stock.idInput.value = '';
     ui.erp.stock.nameInput.value = '';
     ui.erp.stock.priceInput.value = '';
-    ui.erp.stock.quantityInput.value = '';
     ui.erp.stock.descriptionInput.value = '';
     ui.erp.stock.alertLevelInput.value = '';
     ui.erp.stock.imageUploadInput.value = '';
     toggleModal(ui.erp.stock.modal, true);
 }
 
-function deleteProduct(productId) {
-    if (confirm('Tem a certeza de que deseja excluir este produto?')) {
-        database.ref('estoque/' + productId).remove()
-            .then(() => alert('Produto excluído com sucesso!'))
-            .catch(error => alert('Erro ao excluir produto: ' + error.message));
+function addStockUnit(modelId) {
+    const identifier = prompt(`Digite o identificador (Nº de Série) para "${products[modelId].nome}":`);
+    if (identifier) {
+        const cleanIdentifier = identifier.trim();
+        const unitRef = database.ref(`estoque/${modelId}/unidades/${cleanIdentifier}`);
+        unitRef.once('value', snapshot => {
+            if(snapshot.exists()) {
+                alert('Erro: Este identificador já existe para este produto.');
+            } else {
+                unitRef.set({ status: 'disponivel' })
+                    .then(() => alert('Unidade adicionada ao estoque!'))
+                    .catch(e => alert('Erro: ' + e.message));
+            }
+        });
+    }
+}
+
+function deleteProductModel(modelId) {
+    if (confirm('Tem a certeza de que deseja excluir este modelo de produto e TODAS as suas unidades em estoque? Esta ação é irreversível.')) {
+        database.ref('estoque/' + modelId).remove()
+            .then(() => alert('Modelo de produto excluído com sucesso!'))
+            .catch(error => alert('Erro ao excluir modelo: ' + error.message));
     }
 }
 
@@ -955,7 +1137,7 @@ function openNewPurchaseModal() {
     const supplierOptions = Object.entries(suppliers).map(([id, s]) => `<option value="${id}">${s.nome}</option>`).join('');
     const productOptions = Object.entries(products).map(([id, p]) => `<option value="${id}">${p.nome}</option>`).join('');
     if(!supplierOptions || !productOptions) {
-        alert("É necessário ter pelo menos um fornecedor e um produto registado para registar uma compra.");
+        alert("É necessário ter pelo menos um fornecedor e um modelo de produto registado.");
         return;
     }
     ui.erp.purchases.supplierSelect.innerHTML = supplierOptions;
@@ -964,39 +1146,55 @@ function openNewPurchaseModal() {
     ui.erp.purchases.invoiceInput.value = '';
     ui.erp.purchases.paymentMethodSelect.value = 'Boleto';
     ui.erp.purchases.dateInput.value = new Date().toISOString().split('T')[0];
+    ui.erp.purchases.priceInput.value = '';
+    ui.erp.purchases.identifiersTextarea.value = '';
     
-    currentPurchaseItems = {};
+    currentPurchaseItems = [];
     updatePurchaseItemsList();
     toggleModal(ui.erp.purchases.modal, true);
 }
 
 function addItemToPurchase() {
     const productId = ui.erp.purchases.productSelect.value;
-    const quantity = parseInt(ui.erp.purchases.quantityInput.value);
     const unitPrice = parseFloat(ui.erp.purchases.priceInput.value);
+    const identifiers = ui.erp.purchases.identifiersTextarea.value.trim().split('\n').filter(Boolean);
 
-    if (!productId || isNaN(quantity) || quantity <= 0 || isNaN(unitPrice) || unitPrice < 0) {
-        alert("Dados do item inválidos.");
+    if (!productId || isNaN(unitPrice) || unitPrice < 0 || identifiers.length === 0) {
+        alert("Dados do item inválidos. Selecione produto, custo e insira ao menos um identificador.");
         return;
     }
-    currentPurchaseItems[productId] = { nome: products[productId].nome, quantity, unitPrice };
+    
+    currentPurchaseItems.push({
+        modelId: productId,
+        nome: products[productId].nome,
+        unitPrice: unitPrice,
+        identifiers: identifiers
+    });
+
     updatePurchaseItemsList();
+    // Limpar campos para o próximo item
+    ui.erp.purchases.priceInput.value = '';
+    ui.erp.purchases.identifiersTextarea.value = '';
 }
 
 function updatePurchaseItemsList() {
     let total = 0;
-    ui.erp.purchases.itemsList.innerHTML = Object.entries(currentPurchaseItems).map(([id, item]) => {
-        total += item.quantity * item.unitPrice;
+    ui.erp.purchases.itemsList.innerHTML = currentPurchaseItems.map((item, index) => {
+        const subtotal = item.identifiers.length * item.unitPrice;
+        total += subtotal;
         return `<div class="flex justify-between items-center p-2 bg-gray-700 rounded mb-1">
-                    <span>${item.quantity}x ${item.nome} @ R$ ${item.unitPrice.toFixed(2)}</span>
-                    <button class="text-red-400 hover:text-red-600 remove-purchase-item-button" data-id="${id}">&times;</button>
+                    <div>
+                        <p>${item.identifiers.length}x ${item.nome} @ R$ ${item.unitPrice.toFixed(2)}</p>
+                        <p class="text-xs text-gray-400">S/N: ${item.identifiers.join(', ')}</p>
+                    </div>
+                    <button class="text-red-400 hover:text-red-600 remove-purchase-item-button" data-index="${index}">&times;</button>
                 </div>`;
     }).join('');
     ui.erp.purchases.total.textContent = `R$ ${total.toFixed(2)}`;
 }
 
-function removeItemFromPurchase(productId) {
-    delete currentPurchaseItems[productId];
+function removeItemFromPurchase(itemIndex) {
+    currentPurchaseItems.splice(itemIndex, 1);
     updatePurchaseItemsList();
 }
 
@@ -1006,12 +1204,12 @@ function savePurchase() {
     const purchaseDate = ui.erp.purchases.dateInput.value;
     const paymentMethod = ui.erp.purchases.paymentMethodSelect.value;
 
-    if (!supplierId || !invoiceNumber || !purchaseDate || Object.keys(currentPurchaseItems).length === 0) {
-        alert("Preencha todos os campos da compra (fornecedor, nº da nota, data) e adicione itens.");
+    if (!supplierId || !invoiceNumber || !purchaseDate || currentPurchaseItems.length === 0) {
+        alert("Preencha todos os campos da compra e adicione itens.");
         return;
     }
 
-    const total = Object.values(currentPurchaseItems).reduce((sum, item) => sum + item.quantity * item.unitPrice, 0);
+    const total = currentPurchaseItems.reduce((sum, item) => sum + (item.identifiers.length * item.unitPrice), 0);
     const purchaseData = {
         fornecedorId: supplierId,
         fornecedorNome: suppliers[supplierId].nome,
@@ -1041,7 +1239,7 @@ function loadPurchases() {
                 <td>R$ ${p.total.toFixed(2).replace('.',',')}</td>
                 <td>${p.formaPagamento}</td>
                 <td><span class="px-2 py-1 text-xs rounded-full ${p.status === 'Recebido' ? 'bg-green-700' : 'bg-yellow-700'}">${p.status}</span></td>
-                <td class="flex items-center">
+                <td>
                     ${p.status === 'Aguardando Recebimento' ? `<button class="confirm-receipt-button bg-green-600 text-white text-xs px-2 py-1 rounded" data-id="${id}">Receber</button>` : ''}
                     <button class="delete-purchase-button bg-red-600 hover:bg-red-700 text-white text-xs px-2 py-1 rounded ml-2" data-id="${id}">Excluir</button>
                 </td>
@@ -1079,8 +1277,10 @@ async function confirmPurchaseReceipt(purchaseId) {
     const purchase = purchaseSnapshot.val();
     if (purchase && confirm('Confirmar o recebimento desta compra? O estoque será atualizado e uma conta a pagar será gerada.')) {
         const updates = {};
-        for (const [itemId, item] of Object.entries(purchase.itens)) {
-            updates[`/estoque/${itemId}/quantidade`] = firebase.database.ServerValue.increment(item.quantity);
+        for (const item of purchase.itens) {
+            for (const identifier of item.identifiers) {
+                updates[`/estoque/${item.modelId}/unidades/${identifier}`] = { status: 'disponivel' };
+            }
         }
         await database.ref().update(updates);
 
@@ -1219,13 +1419,17 @@ async function confirmTransaction(accountId, type) {
 // --- OUTRAS FUNÇÕES ---
 function updateLowStockAlerts() {
     if (!ui.erp.dashboard.lowStockAlerts) return;
-    const lowStockProducts = Object.values(products).filter(p => p.quantidade <= p.nivelAlertaEstoque);
+    const lowStockProducts = Object.values(products).filter(p => {
+        const availableCount = p.unidades ? Object.values(p.unidades).filter(u => u.status === 'disponivel').length : 0;
+        return availableCount <= (p.nivelAlertaEstoque || 0);
+    });
     if (lowStockProducts.length === 0) {
         ui.erp.dashboard.lowStockAlerts.innerHTML = '<li>Nenhum alerta de estoque baixo.</li>';
     } else {
-        ui.erp.dashboard.lowStockAlerts.innerHTML = lowStockProducts.map(p => 
-            `<li class="text-red-400">${p.nome}: ${p.quantidade} em estoque (Alerta: ${p.nivelAlertaEstoque})</li>`
-        ).join('');
+        ui.erp.dashboard.lowStockAlerts.innerHTML = lowStockProducts.map(p => {
+            const availableCount = p.unidades ? Object.values(p.unidades).filter(u => u.status === 'disponivel').length : 0;
+            return `<li class="text-red-400">${p.nome}: ${availableCount} em estoque (Alerta: ${p.nivelAlertaEstoque})</li>`;
+        }).join('');
     }
 }
 
@@ -1290,7 +1494,7 @@ function attachEventListeners() {
     ui.erp.tabs.forEach(button => button.addEventListener('click', () => switchTab(button.dataset.tab)));
     ui.erp.dashboard.resetSystemButton.addEventListener('click', initiateSystemReset);
 
-    // Delegação de Eventos para botões dinâmicos
+    // Delegação de Eventos para botões e inputs dinâmicos
     document.body.addEventListener('click', e => {
         const target = e.target.closest('button');
         if (!target) return;
@@ -1299,8 +1503,9 @@ function attachEventListeners() {
         
         if (target.classList.contains('add-to-cart-button')) addToCart(datasetId);
         else if (target.classList.contains('remove-from-cart-button')) removeFromCart(datasetId);
-        else if (target.classList.contains('edit-product-button')) openEditProductModal(datasetId);
-        else if (target.classList.contains('delete-product-button')) deleteProduct(datasetId);
+        else if (target.classList.contains('edit-product-model-button')) openEditProductModelModal(datasetId);
+        else if (target.classList.contains('delete-product-model-button')) deleteProductModel(datasetId);
+        else if (target.classList.contains('add-stock-unit-button')) addStockUnit(datasetId);
         else if (target.classList.contains('edit-supplier-button')) openEditSupplierModal(datasetId);
         else if (target.classList.contains('delete-supplier-button')) deleteSupplier(datasetId);
         else if (target.classList.contains('edit-customer-button')) openEditCustomerModal(datasetId);
@@ -1310,8 +1515,15 @@ function attachEventListeners() {
         else if (target.classList.contains('confirm-sale-button')) openPaymentConfirmationModal(datasetId);
         else if (target.classList.contains('cancel-order-button')) cancelOrder(datasetId);
         else if (target.classList.contains('confirm-transaction-button')) confirmTransaction(datasetId, target.dataset.type);
-        else if (target.classList.contains('remove-purchase-item-button')) removeItemFromPurchase(datasetId);
-        else if (target.classList.contains('remove-sale-item-button')) removeItemFromSale(datasetId);
+        else if (target.classList.contains('remove-purchase-item-button')) removeItemFromPurchase(target.dataset.index);
+        else if (target.classList.contains('remove-sale-item-button')) removeItemFromSale(target.dataset.index);
+    });
+
+    // Listener de input para modal de confirmação de venda
+    ui.paymentConfirmationModal.modal.addEventListener('input', e => {
+        if (e.target.classList.contains('confirm-item-price')) {
+            updateConfirmationTotal();
+        }
     });
 
     // Modais
@@ -1326,17 +1538,11 @@ function attachEventListeners() {
     ui.paymentConfirmationModal.closeButton.addEventListener('click', () => toggleModal(ui.paymentConfirmationModal.modal, false));
     ui.paymentConfirmationModal.processButton.addEventListener('click', processSaleConfirmation);
     ui.paymentConfirmationModal.paymentMethodSelect.addEventListener('change', toggleInstallmentFields);
-    ui.paymentConfirmationModal.itemsContainer.addEventListener('input', (e) => {
-        if (e.target.classList.contains('item-price-input')) {
-            recalculateSaleTotal('#order-items-to-confirm', '#confirm-sale-new-total');
-        }
-    });
-
 
     // Modais do ERP
-    ui.erp.stock.addButton.addEventListener('click', openNewProductModal);
+    ui.erp.stock.addModelButton.addEventListener('click', openNewProductModelModal);
     ui.erp.stock.closeModalButton.addEventListener('click', () => toggleModal(ui.erp.stock.modal, false));
-    ui.erp.stock.saveButton.addEventListener('click', saveProduct);
+    ui.erp.stock.saveButton.addEventListener('click', saveProductModel);
 
     ui.erp.suppliers.addButton.addEventListener('click', openNewSupplierModal);
     ui.erp.suppliers.closeModalButton.addEventListener('click', () => toggleModal(ui.erp.suppliers.modal, false));
@@ -1355,15 +1561,16 @@ function attachEventListeners() {
     ui.erp.sales.closeManualSaleModal.addEventListener('click', () => toggleModal(ui.erp.sales.manualSaleModal, false));
     ui.erp.sales.addItemButton.addEventListener('click', addItemToSale);
     ui.erp.sales.saveManualSaleButton.addEventListener('click', saveManualSale);
-    ui.erp.sales.itemsList.addEventListener('input', (e) => {
-        if (e.target.classList.contains('item-price-input')) {
-            recalculateSaleTotal('#sale-items-list', '#sale-total');
-        }
-    });
+    ui.erp.sales.productModelSelect.addEventListener('change', populateSaleIdentifiers);
     
     ui.erp.finance.newExpenseButton.addEventListener('click', openNewExpenseModal);
     ui.expenseModal.closeButton.addEventListener('click', () => toggleModal(ui.expenseModal.modal, false));
     ui.expenseModal.saveButton.addEventListener('click', saveExpense);
+
+    // Listeners dos filtros
+    ui.erp.stock.filterProduct.addEventListener('input', applyStockFilter);
+    ui.erp.stock.filterIdentifier.addEventListener('input', applyStockFilter);
+    ui.erp.sales.applyHistoryFilterButton.addEventListener('click', applySalesHistoryFilter);
 }
 
 document.addEventListener('DOMContentLoaded', () => {
